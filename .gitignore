@@ -4,4 +4,5 @@ dumps/UE4SS_ObjectDump.txt
 dumps/*.log
 tools/downloads/
 *.zip
-package/Win64/
+package/Win64/*
+!package/Win64/Launch SurrounDead MP.bat
