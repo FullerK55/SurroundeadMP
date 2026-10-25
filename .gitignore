@@ -6,3 +6,4 @@ tools/downloads/
 *.zip
 package/Win64/*
 !package/Win64/Launch SurrounDead MP.bat
+!package/Win64/sdmp_update.ps1
