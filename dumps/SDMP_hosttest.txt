@@ -1,0 +1,77 @@
+16:02:58 armed
+16:03:33 Phase 1 host test start
+16:03:33 ---- snapshot: before open (main menu)
+16:03:33   World: World /Game/Levels/PersistentLevel.PersistentLevel
+16:03:33   World.NetDriver: nil
+16:03:33   GameMode: BP_SurroundeadGameMode_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameMode_C_2147482410
+16:03:33   GameMode.NumPlayers: TrivialObject: 000002127ABF08F8
+16:03:33   GameState: BP_SurroundeadGameState_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameState_C_2147482402
+16:03:33   GameState.PlayerArray: 1
+16:03:33   PlayerController: BP_PlayerController_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerController_C_2147482398
+16:03:33   PC.Pawn: nil
+16:03:33   Net driver instances:
+16:03:33     SteamSocketsNetDriver: (no live instances)
+16:03:33     IpNetDriver: (no live instances)
+16:03:33     NetDriver: (no live instances)
+16:03:33     NetConnection: (no live instances)
+16:03:33     SteamSocketsNetConnection: (no live instances)
+16:03:33     IpConnection: (no live instances)
+16:03:33   Player pawns:
+16:03:33     BP_PlayerCharacter_C: (no live instances)
+16:03:33 Issuing console command: open PersistentLevel?listen
+16:03:33 ExecuteConsoleCommand ok=true err=nil
+16:03:53 ---- snapshot: +20s after open
+16:03:53   World: World /Game/Levels/PersistentLevel.PersistentLevel
+16:03:53   World.NetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:03:53   GameMode: BP_SurroundeadGameMode_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameMode_C_2147481972
+16:03:53   GameMode.NumPlayers: TrivialObject: 0000021279EFBD88
+16:03:53   GameState: BP_SurroundeadGameState_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameState_C_2147481963
+16:03:53   GameState.PlayerArray: 1
+16:03:53   PlayerController: BP_PlayerController_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerController_C_2147481959
+16:03:53   PC.Pawn: nil
+16:03:53   Net driver instances:
+16:03:53     SteamSocketsNetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:03:53     IpNetDriver: (no live instances)
+16:03:53     NetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:03:53     NetConnection: (no live instances)
+16:03:53     SteamSocketsNetConnection: (no live instances)
+16:03:53     IpConnection: (no live instances)
+16:03:53   Player pawns:
+16:03:53     BP_PlayerCharacter_C: (no live instances)
+16:04:33 ---- snapshot: +60s after open
+16:04:33   World: World /Game/Levels/PersistentLevel.PersistentLevel
+16:04:33   World.NetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:04:33   GameMode: BP_SurroundeadGameMode_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameMode_C_2147481972
+16:04:33   GameMode.NumPlayers: TrivialObject: 0000021279EFBC98
+16:04:33   GameState: BP_SurroundeadGameState_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameState_C_2147481963
+16:04:33   GameState.PlayerArray: 1
+16:04:33   PlayerController: BP_PlayerController_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerController_C_2147481959
+16:04:33   PC.Pawn: nil
+16:04:33   Net driver instances:
+16:04:33     SteamSocketsNetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:04:33     IpNetDriver: (no live instances)
+16:04:33     NetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:04:33     NetConnection: (no live instances)
+16:04:33     SteamSocketsNetConnection: (no live instances)
+16:04:33     IpConnection: (no live instances)
+16:04:33   Player pawns:
+16:04:33     BP_PlayerCharacter_C: (no live instances)
+16:05:33 ---- snapshot: +120s after open
+16:05:33   World: World /Game/Levels/PersistentLevel.PersistentLevel
+16:05:33   World.NetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:05:33   GameMode: BP_SurroundeadGameMode_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameMode_C_2147481972
+16:05:33   GameMode.NumPlayers: TrivialObject: 000002124B5E3678
+16:05:33   GameState: BP_SurroundeadGameState_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameState_C_2147481963
+16:05:33   GameState.PlayerArray: 1
+16:05:33   PlayerController: BP_PlayerController_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerController_C_2147481959
+16:05:33   PC.Pawn: nil
+16:05:33   Net driver instances:
+16:05:33     SteamSocketsNetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:05:33     IpNetDriver: (no live instances)
+16:05:33     NetDriver: SteamSocketsNetDriver /Engine/Transient.SteamSocketsNetDriver_2147481971
+16:05:33     NetConnection: (no live instances)
+16:05:33     SteamSocketsNetConnection: (no live instances)
+16:05:33     IpConnection: (no live instances)
+16:05:33   Player pawns:
+16:05:33     BP_PlayerCharacter_C: (no live instances)
+16:05:33 DONE

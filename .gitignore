@@ -1,0 +1,7 @@
+# large generated dumps (regenerate with mods/SDMP_AutoDump)
+dumps/UHTHeaderDump/
+dumps/UE4SS_ObjectDump.txt
+dumps/*.log
+tools/downloads/
+*.zip
+package/Win64/

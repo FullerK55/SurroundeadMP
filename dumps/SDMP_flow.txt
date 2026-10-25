@@ -1,0 +1,76 @@
+16:07:16 armed
+16:07:26 hooked /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Event_LoadLevel
+16:07:26 HOOK FAILED ...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:58: Tried to register a hook with Lua function 'RegisterHook' but no UFunction with the specified name was found.
+Function Name: /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:SmoothLoadLevel
+stack traceback:
+	[C]: in function 'RegisterHook'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:58: in function <...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:57>
+	[C]: in function 'pcall'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:57: in upvalue 'install'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:87: in function <...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:86> /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:SmoothLoadLevel
+16:07:26 hooked /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:GameMode_SpawnPlayer
+16:07:26 hooked /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Survival_SpawnPlayer
+16:07:26 hooked /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Survival_Respawn
+16:07:26 hooked /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Debug_SpawnPlayer
+16:07:26 HOOK FAILED ...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:58: Tried to register a hook with Lua function 'RegisterHook' but no UFunction with the specified name was found.
+Function Name: /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:PlayerSpawnedInLevel
+stack traceback:
+	[C]: in function 'RegisterHook'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:58: in function <...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:57>
+	[C]: in function 'pcall'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:57: in upvalue 'install'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:87: in function <...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:86> /Game/Blueprints/SD_GameInstance.SD_GameInstance_C:PlayerSpawnedInLevel
+16:07:26 hooked /Game/Blueprints/BP_PlayerController.BP_PlayerController_C:ReceivePossess
+16:07:26 hooked /Game/Blueprints/BP_PlayerController.BP_PlayerController_C:LoadGameFromSlot
+16:07:26 hooked /Game/Blueprints/BP_PlayerController.BP_PlayerController_C:SaveGameToSlot
+16:07:26 hooked /Game/Blueprints/BP_SurroundeadGameMode.BP_SurroundeadGameMode_C:ReceiveBeginPlay
+16:07:26 hooked /Game/Blueprints/BP_SurroundeadGameMode.BP_SurroundeadGameMode_C:ReceiveEndPlay
+16:07:26 hooked /Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:ReceiveBeginPlay
+16:07:26 hooked /Script/Engine.GameplayStatics:OpenLevel
+16:07:26 hooked /Script/Engine.GameplayStatics:OpenLevelBySoftObjectPtr
+16:07:26 hooked /Script/Engine.GameplayStatics:GetStreamingLevel
+16:07:26 hooked /Script/Engine.GameplayStatics:LoadStreamLevel
+16:07:26 hooked /Script/Engine.GameplayStatics:UnloadStreamLevel
+16:07:26 hooked /Script/Engine.GameplayStatics:LoadStreamLevelBySoftObjectPtr
+16:07:26 HOOK FAILED ...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:58: Tried to register a hook with Lua function 'RegisterHook' but no UFunction with the specified name was found.
+Function Name: /Script/Engine.GameMode:RestartPlayer
+stack traceback:
+	[C]: in function 'RegisterHook'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:58: in function <...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:57>
+	[C]: in function 'pcall'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:57: in upvalue 'install'
+	...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:87: in function <...inaries\Win64\ue4ss\Mods\SDMP_FlowTrace\Scripts\main.lua:86> /Script/Engine.GameMode:RestartPlayer
+16:07:26 hooked /Script/Engine.GameModeBase:RestartPlayer
+16:07:26 hooked /Script/Engine.GameModeBase:K2_PostLogin
+16:07:26 hooked /Script/Engine.GameModeBase:K2_OnLogout
+16:07:34 CALL UnloadStreamLevel  self=GameplayStatics /Script/Engine.Default__GameplayStatics  args=[PersistentLevel_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.PersistentLevel_C_3, None, ScriptStruct /Script/Engine.LatentActionInfo, false]
+16:07:34 CALL LoadStreamLevel  self=GameplayStatics /Script/Engine.Default__GameplayStatics  args=[PersistentLevel_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.PersistentLevel_C_3, MainMenu, true, false, ScriptStruct /Script/Engine.LatentActionInfo]
+16:07:51 NET[before listen] world=/Game/Levels/PersistentLevel.PersistentLevel driver=nil pawn=nil players=1 connections=0
+16:07:51 issued: open PersistentLevel?listen  -- now click New Game / Continue in the game
+16:07:51 CALL ReceiveEndPlay  self=BP_SurroundeadGameMode_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameMode_C_2147482410  args=[1]
+16:07:52 CALL Event_LoadLevel  self=SD_GameInstance_C /Engine/Transient.GameEngine_2147482619:SD_GameInstance_C_2147482551  args=[MainMenu]
+16:07:52 CALL ReceiveBeginPlay  self=BP_SurroundeadGameMode_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_SurroundeadGameMode_C_2147481980  args=[]
+16:07:52 CALL UnloadStreamLevel  self=GameplayStatics /Script/Engine.Default__GameplayStatics  args=[PersistentLevel_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.PersistentLevel_C_3, None, ScriptStruct /Script/Engine.LatentActionInfo, false]
+16:07:52 CALL LoadStreamLevel  self=GameplayStatics /Script/Engine.Default__GameplayStatics  args=[PersistentLevel_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.PersistentLevel_C_3, MainMenu, true, false, ScriptStruct /Script/Engine.LatentActionInfo]
+16:08:06 NET[after listen] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:08:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:08:51 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:09:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:09:51 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:10:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:10:51 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:11:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:11:51 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:12:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:12:51 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:13:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=nil players=1 connections=0
+16:13:38 CALL Event_LoadLevel  self=SD_GameInstance_C /Engine/Transient.GameEngine_2147482619:SD_GameInstance_C_2147482551  args=[LongdownValley]
+16:13:38 CALL UnloadStreamLevel  self=GameplayStatics /Script/Engine.Default__GameplayStatics  args=[PersistentLevel_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.PersistentLevel_C_3, MainMenu, ScriptStruct /Script/Engine.LatentActionInfo, false]
+16:13:39 CALL LoadStreamLevel  self=GameplayStatics /Script/Engine.Default__GameplayStatics  args=[PersistentLevel_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.PersistentLevel_C_3, LongdownValley, true, false, ScriptStruct /Script/Engine.LatentActionInfo]
+16:13:46 CALL ReceiveBeginPlay  self=BP_PlayerCharacter_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerCharacter_C_2147479384  args=[]
+16:13:46 CALL ReceivePossess  self=BP_PlayerController_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerController_C_2147481967  args=[BP_PlayerCharacter_C /Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerCharacter_C_2147479384]
+16:13:46 CALL Survival_SpawnPlayer  self=SD_GameInstance_C /Engine/Transient.GameEngine_2147482619:SD_GameInstance_C_2147482551  args=[]
+16:13:51 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=/Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerCharacter_C_2147479384 players=1 connections=0
+16:14:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=/Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerCharacter_C_2147479384 players=1 connections=0
+16:14:51 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=/Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerCharacter_C_2147479384 players=1 connections=0
+16:15:21 NET[periodic] world=/Game/Levels/PersistentLevel.PersistentLevel driver=/Engine/Transient.SteamSocketsNetDriver_2147481979 pawn=/Game/Levels/PersistentLevel.PersistentLevel:PersistentLevel.BP_PlayerCharacter_C_2147479384 players=1 connections=0

@@ -1,0 +1,314 @@
+SDMP probe Sun Oct 25 15:52:17 2026
+GameEngine.NetDriverDefinitions count = 1
+  [1] GameNetDriver -> SteamSockets.SteamSocketsNetDriver (fallback OnlineSubsystemUtils.IpNetDriver)
+
+==== /Script/Engine.Character
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = true
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  ServerMovePacked                                   Net|Server
+  RPC  ServerMoveOld                                      Net|Server
+  RPC  ServerMoveNoBase                                   Net|Server
+  RPC  ServerMoveDualNoBase                               Net|Server
+  RPC  ServerMoveDualHybridRootMotion                     Net|Server
+  RPC  ServerMoveDual                                     Net|Server
+  RPC  ServerMove                                         Net|Server
+  RPC  RootMotionDebugClientPrintOnScreen                 Net|Reliable|Client
+  RPC  ClientVeryShortAdjustPosition                      Net|Client
+  RPC  ClientMoveResponsePacked                           Net|Client
+  RPC  ClientCheatWalk                                    Net|Reliable|Client
+  RPC  ClientCheatGhost                                   Net|Reliable|Client
+  RPC  ClientCheatFly                                     Net|Reliable|Client
+  RPC  ClientAdjustRootMotionSourcePosition               Net|Client
+  RPC  ClientAdjustRootMotionPosition                     Net|Client
+  RPC  ClientAdjustPosition                               Net|Client
+  RPC  ClientAckGoodMove                                  Net|Client
+  summary: 48 functions (17 net RPC), 40 properties (0 replicated)
+
+==== /Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = true
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  SERVER_ChangeActiveSlot                            Net|Reliable|Server
+  RPC  Client_AddUI                                       Net|Client
+  RPC  Client_SetCombatCrosshair                          Net|Client
+  RPC  Client_SetInteractCrosshair                        Net|Client
+  RPC  Svr_SetADS                                         Net|Server
+  RPC  MC_StopADS                                         Net|Multicast
+  RPC  MC_ADS                                             Net|Multicast
+  RPC  Svr_StopADS                                        Net|Server
+  RPC  Svr_ADS                                            Net|Server
+  RPC  Client_StopAllCameraShake                          Net|Client
+  RPC  Client_ADSCameraShake                              Net|Client
+  RPC  Svr_SetJumpVelocity                                Net|Server
+  RPC  Svr_SetActorLocation                               Net|Server
+  RPC  Svr_SetActorRotation                               Net|Server
+  RPC  Svr_SetMovement                                    Net|Server
+  RPC  MC_SetCapsuleSize                                  Net|Multicast
+  RPC  MC_FlashlightRotation                              Net|Multicast
+  RPC  Svr_FlashlightRotation                             Net|Server
+  RPC  MC_Flashlight                                      Net|Multicast
+  RPC  Svr_Flashlight                                     Net|Server
+  RPC  MC_ADSUnCrouch                                     Net|Multicast
+  RPC  MC_ADSCrouch                                       Net|Multicast
+  RPC  MC_UnCrouch                                        Net|Multicast
+  RPC  MC_Crouch                                          Net|Multicast
+  RPC  Event_ADS UnCrouch                                 Net|Server
+  RPC  Svr_ADSCrouch                                      Net|Server
+  RPC  Svr_UnCrouch                                       Net|Server
+  RPC  Svr_Crouch                                         Net|Reliable|Server
+  RPC  Svr_Distract                                       Net|Server
+  RPC  MC_Distract                                        Net|Multicast
+  RPC  MC_StopMeleeAim                                    Net|Multicast
+  RPC  Svr_MeleeAim                                       Net|Server
+  RPC  Svr_StopMeleeAim                                   Net|Server
+  RPC  MC_MeleeAim                                        Net|Multicast
+  RPC  Client_RollRotation                                Net|Client
+  RPC  Svr_PlayerRoll                                     Net|Server
+  RPC  Client_SUICIDE                                     Net|Client
+  RPC  Client_HitEffects                                  Net|Client
+  RPC  MC_PlayerDead                                      Net|Multicast
+  RPC  Client_UpdateOxygenUI                              Net|Client
+  RPC  Client_CameraShake                                 Net|Client
+  RPC  MC_PlaySoundAtLocation                             Net|Multicast
+  RPC  Svr_ReduceStamina                                  Net|Server
+  RPC  MC_AttachClothing                                  Net|Multicast
+  RPC  Svr_AttachClothing                                 Net|Server
+  RPC  MC_StopMontage                                     Net|Multicast
+  RPC  Svr_StopMontage                                    Net|Server
+  RPC  MC_Montage                                         Net|Multicast
+  RPC  Svr_Montage                                        Net|Server
+  RPC  Svr_DestroyComponent                               Net|Client
+  RPC  Client_UpdateStaminaUI                             Net|Client
+  RPC  Client_UpdateHealthUI                              Net|Client
+  RPC  Client_UpdateHungerUI                              Net|Client
+  RPC  Client_UpdateThirstUI                              Net|Client
+  RPC  Client_UpdateRadiationUI                           Net|Client
+  RPC  Svr_UpdateCombatState                              Net|Server
+  RPC  MC_UpdateCombatState                               Net|Reliable|Multicast
+  RPC  Grass                                              Net|Reliable|Server
+  RPC  MC_BloodSplatter                                   Net|Multicast
+  RPC  Svr_BloodSplatter                                  Net|Server
+  RPC  Svr_UpdateSprintSpeed                              Net|Server
+  RPC  Svr_UpdateWalkSpeed                                Net|Server
+  RPC  MC_UpdateWeaponSpeed                               Net|Multicast
+  RPC  Svr_UpdateWeaponSpeed                              Net|Server
+  RPC  MC_UpdateSpeed                                     Net|Multicast
+  RPC  Svr_UpdateSpeed                                    Net|Server
+  RPC  MC_SwimFast                                        Net|Multicast
+  RPC  Svr_SwimFast                                       Net|Server
+  RPC  MC_CrouchSprint                                    Net|Multicast
+  RPC  Svr_CrouchSprint                                   Net|Server
+  RPC  Svr_WeaponShove                                    Net|Server
+  RPC  Client_MapToggle                                   Net|Client
+  summary: 789 functions (72 net RPC), 223 properties (0 replicated)
+
+==== /Game/Blueprints/BP_PlayerController.BP_PlayerController_C
+  CDO.bReplicates = false
+  CDO.bReplicateMovement = false
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = true
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  Svr_RequestRespawn_SpawnPoint                      Net|Server
+  RPC  Svr_RequestRespawnSuicide                          Net|Reliable|Server
+  RPC  Client_SUICIDE                                     Net|Client
+  RPC  Svr_RequestRespawn_Random                          Net|Reliable|Server
+  RPC  Client_Died                                        Net|Reliable|Client
+  RPC  CameraShakeClient                                  Net|Client
+  summary: 32 functions (6 net RPC), 23 properties (0 replicated)
+
+==== /Game/Blueprints/BP_SurroundeadGameMode.BP_SurroundeadGameMode_C
+  CDO.bReplicates = false
+  CDO.bReplicateMovement = false
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = false
+  CDO.NetUpdateFrequency = 10.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  summary: 9 functions (0 net RPC), 4 properties (0 replicated)
+
+==== /Game/Blueprints/BP_SurroundeadGameState.BP_SurroundeadGameState_C
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = false
+  CDO.bAlwaysRelevant = true
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = false
+  CDO.NetUpdateFrequency = 10.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  summary: 14 functions (0 net RPC), 8 properties (0 replicated)
+
+==== /Game/Blueprints/SD_GameInstance.SD_GameInstance_C
+  CDO.bReplicates = TrivialObject: 000001F0DED16878
+  CDO.bReplicateMovement = TrivialObject: 000001F0DED164B8
+  CDO.bAlwaysRelevant = TrivialObject: 000001F0DED16968
+  CDO.bOnlyRelevantToOwner = TrivialObject: 000001F0DED162D8
+  CDO.bNetLoadOnClient = TrivialObject: 000001F17177B5D8
+  CDO.NetUpdateFrequency = TrivialObject: 000001F17177B038
+  CDO.bReplicateUsingRegisteredSubObjectList = TrivialObject: 000001F17177BB78
+  summary: 27 functions (0 net RPC), 11 properties (0 replicated)
+
+==== /Game/JigSInventory/Jigsaw/Components/BP_JigMultiplayer.BP_JigMultiplayer_C
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = TrivialObject: 000001F17177B4E8
+  CDO.bAlwaysRelevant = TrivialObject: 000001F17177BC68
+  CDO.bOnlyRelevantToOwner = TrivialObject: 000001F17177B218
+  CDO.bNetLoadOnClient = TrivialObject: 000001F17177B128
+  CDO.NetUpdateFrequency = TrivialObject: 000001F17177B308
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  SERVER_RequestRemoveItem                           Net|Reliable|Server
+  RPC  MC_UpdateDurability                                Net|Multicast
+  RPC  SERVER_RequestCraftItemDrop                        Net|Reliable|Server
+  RPC  CLIENT_UpdateCustomValues                          Net|Reliable|Client
+  RPC  SERVER_LoadSaveDataFromClientSide                  Net|Reliable|Server
+  RPC  SERVER_ForwardInteract                             Net|Reliable|Server
+  RPC  MC_OnPendingDone                                   Net|Multicast
+  RPC  SERVER_RequestExpandContainer                      Net|Reliable|Server
+  RPC  CLIENT_ExpandContainer                             Net|Reliable|Client
+  RPC  CLIENT_SwapContainersResponse                      Net|Reliable|Client
+  RPC  SERVER_RequestSwapContainers                       Net|Reliable|Server
+  RPC  SERVER_RequestChamberUID                           Net|Reliable|Server
+  RPC  CLIENT_UpdateChamberBulletUID                      Net|Reliable|Client
+  RPC  SERVER_FireArmChamberWeapon                        Net|Reliable|Server
+  RPC  CLIENT_UpdateDurability                            Net|Reliable|Client
+  RPC  SERVER_RequestActorAddStackItem                    Net|Reliable|Server
+  RPC  CLIENT_AddStackActorResponse                       Net|Reliable|Client
+  RPC  SERVER_RequestLoadReplaceOneContainerByIndex       Net|Reliable|Server
+  RPC  SERVER_RequestSaveOneJigContainerByIndex           Net|Reliable|Server
+  RPC  SERVER_RequestSaveGame                             Net|Reliable|Server
+  RPC  SERVER_RequestDataFromSave                         Net|Reliable|Server
+  RPC  CLIENT_ItemCraftedResponse                         Net|Reliable|Client
+  RPC  SERVER_RequestCraftItem                            Net|Reliable|Server
+  RPC  SERVER_RequestReloadInternal                       Net|Reliable|Server
+  RPC  CLIENT_ReloadResponse                              Net|Reliable|Client
+  RPC  SERVER_RequestReload                               Net|Reliable|Server
+  RPC  SERVER_RequestConsumeItem                          Net|Reliable|Server
+  RPC  MC_UpdateCounts                                    Net|Multicast
+  RPC  CLIENT_UpdateCounts                                Net|Reliable|Client
+  RPC  CLIENT_DropRequestFailed                           Net|Reliable|Client
+  RPC  SERVER_RequestDropItem                             Net|Reliable|Server
+  RPC  CLIENT_MoveItemToIndex                             Net|Reliable|Client
+  RPC  CLIENT_AddActorToContainerSUCCESS                  Net|Reliable|Client
+  RPC  CLIENT_RequestAddActorToContainerFAILED            Net|Reliable|Client
+  RPC  SERVER_RequestAddActorToContainer                  Net|Reliable|Server
+  RPC  CLIENT_EquipActorSuccess                           Net|Reliable|Client
+  RPC  CLIENT_RequestEquipResponseFailed                  Net|Reliable|Client
+  RPC  SERVER_RequestEquipActorToContainer                Net|Reliable|Server
+  RPC  MC_AddNewItem                                      Net|Multicast
+  RPC  MC_UpdateStack                                     Net|Multicast
+  RPC  CLIENT_UpdateStack                                 Net|Reliable|Client
+  RPC  SERVER_RequestStackItem                            Net|Reliable|Server
+  RPC  CLIENT_NewItemAdded                                Net|Reliable|Client
+  RPC  MC_NewItemAdded                                    Net|Multicast
+  RPC  Client_SameCompUpdateSplitRequest                  Net|Reliable|Client
+  RPC  CLIENT_UpdateCount                                 Net|Reliable|Client
+  RPC  MC_UpdateCount                                     Net|Multicast
+  RPC  MC_SameCompUpdateSplitRequest                      Net|Multicast
+  RPC  SERVER_RequestSplitItem                            Net|Reliable|Server
+  RPC  CLIENT_AddNewItem                                  Net|Reliable|Client
+  RPC  CLIENT_ItemRemoved                                 Net|Reliable|Client
+  RPC  MC_ItemRemoved                                     Net|Multicast
+  RPC  SERVER_RequestMoveItemToAnotherComp                Net|Reliable|Server
+  RPC  MC_MoveItemToIndex                                 Net|Multicast
+  RPC  CLIENT_MoveToIndexFailed                           Net|Reliable|Client
+  RPC  SERVER_SameContainer_MoveToIndex                   Net|Reliable|Server
+  RPC  CLIENT_ContainerDataResponse                       Net|Reliable|Client
+  RPC  SERVER_RequestData                                 Net|Reliable|Server
+  RPC  CLIENT_OnStatsUpdated                              Net|Reliable|Client
+  RPC  CLIENT_OnStatUpdated                               Net|Client
+  RPC  SERVER_UpdateStatByUID                             Net|Reliable|Server
+  summary: 292 functions (61 net RPC), 39 properties (0 replicated)
+
+==== /Game/Inventory/Items/Pickups/Weapons/Firearms/BP_FirearmPickup.BP_FirearmPickup_C
+  CDO.bReplicates = false
+  CDO.bReplicateMovement = false
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  Svr_SpawnTrail                                     Net|Server
+  RPC  Svr_WeaponEffects                                  Net|Server
+  RPC  MC_SpawnTrail                                      Net|Multicast
+  RPC  MC_WeaponEffects                                   Net|Multicast
+  RPC  MC_WeaponShot                                      Net|Multicast
+  RPC  Svr_WeaponShot                                     Net|Server
+  RPC  SERVER_DamageEvent                                 Net|Reliable|Server
+  RPC  Client_HitUI                                       Net|Client
+  summary: 81 functions (8 net RPC), 23 properties (0 replicated)
+
+==== /Game/SmartAI/Blueprints/AI/AICharacters/BP_MasterAICharacter.BP_MasterAICharacter_C
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = true
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  summary: 36 functions (0 net RPC), 31 properties (0 replicated)
+
+==== /Game/AI/Zombies/BP_Zombie.BP_Zombie_C
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = true
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  summary: 0 functions (0 net RPC), 0 properties (0 replicated)
+
+==== /Game/AI/Zombies/BP_ZombieAIController.BP_ZombieAIController_C
+  CDO.bReplicates = false
+  CDO.bReplicateMovement = false
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = true
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  summary: 8 functions (0 net RPC), 6 properties (0 replicated)
+
+==== /Game/Blueprints/BuildingSystem/Actors/Buildable_MASTER.Buildable_MASTER_C
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = false
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  MC_Destroy                                         Net|Multicast
+  RPC  MC_OnInteractBuildable                             Net|Multicast
+  RPC  Svr_Spawn                                          Net|Reliable|Server
+  summary: 66 functions (3 net RPC), 26 properties (0 replicated)
+
+==== /Game/Blueprints/Vehicles/BP_VehicleMaster.BP_VehicleMaster_C
+  CDO.bReplicates = true
+  CDO.bReplicateMovement = true
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  Svr_UpdateFuel                                     Net|Server
+  RPC  Svr_UpdateEngine                                   Net|Server
+  summary: 88 functions (2 net RPC), 54 properties (0 replicated)
+
+==== /Game/Blueprints/HUD_Game.HUD_Game_C
+  CDO.bReplicates = false
+  CDO.bReplicateMovement = false
+  CDO.bAlwaysRelevant = false
+  CDO.bOnlyRelevantToOwner = false
+  CDO.bNetLoadOnClient = true
+  CDO.NetUpdateFrequency = 100.0
+  CDO.bReplicateUsingRegisteredSubObjectList = false
+  RPC  Client_PauseGame                                   Net|Client
+  RPC  Client_ForceUnpause                                Net|Client
+  summary: 27 functions (2 net RPC), 18 properties (0 replicated)
