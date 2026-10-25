@@ -3,8 +3,10 @@ SurrounDead fan multiplayer (SDMP) - test build
 
 INSTALL (2 steps)
 1. In Steam: right-click SurrounDead > Manage > Browse local files.
-   That opens the top folder. Go INTO  SurrounDead  then  Binaries  then  Win64.
+   That opens the top folder, which contains TWO folders: "Engine" and "SurrounDead".
+   Go INTO  SurrounDead  (NOT Engine), then  Binaries, then  Win64.
    You are in the right place when you see  SurrounDead-Win64-Shipping.exe  (about 116 MB).
+   If you see files like tbb.dll but no SurrounDead-Win64-Shipping.exe, you are in the Engine one. Go back.
 2. Drag everything from this zip's "Win64" folder into that folder. Overwrite if asked.
    You should now have  dwmapi.dll ,  a folder called  ue4ss , and  "Launch SurrounDead MP.bat"
    right next to SurrounDead-Win64-Shipping.exe.
