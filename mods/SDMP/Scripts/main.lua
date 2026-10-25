@@ -9,7 +9,7 @@
 -- Log: <Win64>/SDMP.log
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.0"
+local VERSION = "0.1.1"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -21,6 +21,18 @@ local function log(s)
 end
 
 local state = { hosting = false, joining = false, target = nil, spawned = {} }
+
+-- UE4SS timers (ExecuteWithDelay / LoopAsync) run on their own thread. Anything that touches
+-- game objects (spawn, possess, level streaming, even reading actors) must hop to the game thread.
+local function gt(fn)
+  return function(...)
+    local args = { ... }
+    ExecuteInGameThread(function()
+      local ok, err = pcall(fn, table.unpack(args))
+      if not ok then print("[SDMP] game-thread error: " .. tostring(err) .. "\n") end
+    end)
+  end
+end
 
 -- ---------- helpers ----------
 local function valid(o) return o ~= nil and o:IsValid() end
@@ -208,7 +220,7 @@ local function cmdHost()
   consoleCmd("open PersistentLevel?listen")
   state.hosting = true
   state.hostAttempts = (state.hostAttempts or 0) + 1
-  ExecuteWithDelay(8000, function()
+  ExecuteWithDelay(8000, gt(function()
     status("host")
     local nd = netDriver()
     if nd and not isClient() then
@@ -221,7 +233,7 @@ local function cmdHost()
       log("HOSTING FAILED after 4 attempts. Restart the game, wait on the main menu 60s, try again.")
       state.hostAttempts = 0
     end
-  end)
+  end))
   return true
 end
 
@@ -231,9 +243,9 @@ local function cmdJoin(target, viaIp)
   log("sdmp_join: open " .. url)
   state.joining = true; state.target = url
   consoleCmd("open " .. url)
-  for _, d in ipairs({ 5000, 10000, 20000, 40000 }) do ExecuteWithDelay(d, function() status("join+" .. (d / 1000) .. "s") end) end
-  ExecuteWithDelay(12000, function() logLevels("join+12s") end)
-  ExecuteWithDelay(45000, function() logLevels("join+45s") end)
+  for _, d in ipairs({ 5000, 10000, 20000, 40000 }) do ExecuteWithDelay(d, gt(function() status("join+" .. (d / 1000) .. "s") end)) end
+  ExecuteWithDelay(12000, gt(function() logLevels("join+12s") end))
+  ExecuteWithDelay(45000, gt(function() logLevels("join+45s") end))
   return true
 end
 
@@ -279,8 +291,8 @@ pcall(function()
   RegisterHook("/Script/Engine.GameModeBase:K2_PostLogin", function(ctx, newPlayer)
     local who = "?"; pcall(function() who = short(newPlayer:get()) end)
     log("PostLogin: " .. who)
-    ExecuteWithDelay(3000, spawnMissing)
-    ExecuteWithDelay(10000, spawnMissing)
+    ExecuteWithDelay(3000, gt(spawnMissing))
+    ExecuteWithDelay(10000, gt(spawnMissing))
   end)
 end)
 pcall(function()
@@ -308,8 +320,10 @@ for _, fn in ipairs({
 end
 
 LoopAsync(5000, function()
-  if state.hosting then pcall(spawnMissing) end
-  if state.joining and isClient() then pcall(ensureLevelLoaded) end
+  ExecuteInGameThread(function()
+    if state.hosting then pcall(spawnMissing) end
+    if state.joining and isClient() then pcall(ensureLevelLoaded) end
+  end)
   return false
 end)
 
@@ -338,20 +352,19 @@ do local role = os.getenv("SDMP_DEV")
     logf = io.open("SDMP_" .. role:gsub("[^%w]", "_") .. ".log", "a")
     log("SDMP_DEV=" .. role)
     if role == "host" or role == "hostip" then
-      ExecuteWithDelay(35000, function() if role == "hostip" then setNetDriver(DRIVER_IP) end; cmdHost() end)
-      ExecuteWithDelay(50000, function()
+      ExecuteWithDelay(35000, gt(function() if role == "hostip" then state.useIpDriver = true; setNetDriver(DRIVER_IP) end; cmdHost() end))
+      ExecuteWithDelay(50000, gt(function()
         local ok, err = pcall(function() UEHelpers.GetGameInstance():Event_LoadLevel(FName(LEVEL_NAME)) end)
         log("dev host: Event_LoadLevel(" .. LEVEL_NAME .. ") ok=" .. tostring(ok) .. " " .. tostring(err))
-      end)
-      ExecuteWithDelay(75000, function() logLevels("host+75s") end)
-      ExecuteWithDelay(150000, function() logLevels("host+150s") end)
-      LoopAsync(15000, function() status("dev-host"); return false end)
+      end))
+      ExecuteWithDelay(75000, gt(function() logLevels("host+75s") end))
+      LoopAsync(15000, function() ExecuteInGameThread(function() status("dev-host") end); return false end)
     elseif role:sub(1, 5) == "join:" then
-      ExecuteWithDelay(45000, function() cmdJoin(role:sub(6), true) end)
-      LoopAsync(15000, function() status("dev-join"); return false end)
+      ExecuteWithDelay(45000, gt(function() cmdJoin(role:sub(6), true) end))
+      LoopAsync(15000, function() ExecuteInGameThread(function() status("dev-join") end); return false end)
     elseif role:sub(1, 7) == "joinip:" then
-      ExecuteWithDelay(45000, function() setNetDriver(DRIVER_IP); cmdJoin(role:sub(8), true) end)
-      LoopAsync(15000, function() status("dev-join"); return false end)
+      ExecuteWithDelay(45000, gt(function() setNetDriver(DRIVER_IP); cmdJoin(role:sub(8), true) end))
+      LoopAsync(15000, function() ExecuteInGameThread(function() status("dev-join") end); return false end)
     end
   end
 end
@@ -363,12 +376,15 @@ do local f = io.open("SDMP_autohost.txt", "r"); if f then
   local delay = tonumber(mode:match("(%d+)")) or 35
   local useIp = mode:find("ip") ~= nil
   log("SDMP_autohost.txt present: hosting in " .. delay .. "s (ip=" .. tostring(useIp) .. "), spawntest after New Game")
-  ExecuteWithDelay(delay * 1000, function() if useIp then state.useIpDriver = true; setNetDriver(DRIVER_IP) end; cmdHost() end)
+  ExecuteWithDelay(delay * 1000, gt(function() if useIp then state.useIpDriver = true; setNetDriver(DRIVER_IP) end; cmdHost() end))
   local done = false
   LoopAsync(5000, function()
     if done then return true end
-    local ok, hp = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
-    if ok and valid(hp) then done = true; status("in-world"); spawnTest(); return true end
+    ExecuteInGameThread(function()
+      if done then return end
+      local ok, hp = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
+      if ok and valid(hp) then done = true; status("in-world"); spawnTest() end
+    end)
     return false
   end)
 end end
