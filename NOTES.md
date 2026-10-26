@@ -158,6 +158,27 @@ with `-nosteam`. So: edit `mods/SDMP`, commit, push, and every friend gets it ne
   and comparing the instance address. The menu widget only exists after the "press any key" screen; the injector polls.
   After hosting the menu is rebuilt; a status button "HOSTING OK - now click New or Load" is injected instead.
 
+## Join feedback and a client crash (0.1.5, 2026-10-25 20:20-20:32)
+
+- Join button now shows CONNECTING / HOST FOUND, LOADING / HOST NOT FOUND (15s). "Host found" = a NetConnection's
+  `LastReceiveTime` advanced past the value first seen (it is stamped at creation, so a nonzero value alone means nothing).
+  Verified: no host -> NOT FOUND at 15s; host -> found at ~1s, in world at ~5s.
+- A client crashed (access violation, breadcrumb `/Game/Levels/MainMenu.MainMenu_C`) when the mod unloaded the MainMenu
+  sub-level and removed `LoadingScreenWidget_C` in the same second the travel completed. Fix: never touch the loading
+  screen; wait 4s after the pawn exists before removing the menu widget / setting input mode, 6s before any level
+  streaming change. Two loopback rounds clean afterwards.
+- Host log now prints PLAYER JOINED / PLAYER LEFT; the host's menu status entry shows the player count.
+
+## Intermittent crash ~20s after launch, no join involved (0.1.6, 2026-10-25 20:37-20:53)
+
+Host's game crashed 20s after a plain launch (access violation, call stack entirely inside UE4SS, right after
+"[FCallbackGarbageCollector] Freed invalid callbacks!"). Reproduced 1 in 3 launches. Common factor: two
+`ExecuteWithDelay(12000, gt(...))` callbacks (hook registration) firing just before UE4SS's callback GC; the
+`ExecuteInGameThread` closure created inside a finished ExecuteWithDelay callback is the likely use-after-free.
+Fix: ONE `LoopAsync(1000)` that runs a Lua scheduler (`after`/`every`/`cancel`) via a single `ExecuteInGameThread`
+per tick; no ExecuteWithDelay anywhere. 5/5 cold launches clean, loopback clean. Rule for this mod: never use
+ExecuteWithDelay, never nest ExecuteInGameThread inside another UE4SS async callback except the scheduler's.
+
 ## Plan
 
 1. Host test, one machine: in the UE4SS console run `open PersistentLevel?listen` from the main menu and check the log for a
