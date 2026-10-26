@@ -139,11 +139,8 @@ local function spawnFor(pc)
   local world = UEHelpers.GetWorld()
   local cls = StaticFindObject(PLAYER_CLASS)
   if not valid(cls) then log("spawnFor: player class not found"); return false end
-  local loc = { X = 0, Y = 0, Z = 300 }
-  pcall(function()
-    local hp = UEHelpers.GetPlayerController().Pawn
-    if valid(hp) then local l = hp:K2_GetActorLocation(); loc = { X = l.X + 250, Y = l.Y + 250, Z = l.Z + 100 } end
-  end)
+  local g = state.lastGood or { X = 0, Y = 0, Z = 300 }
+  local loc = { X = g.X + 250, Y = g.Y + 250, Z = g.Z + 100 }
   local ok, pawn = pcall(function() return world:SpawnActor(cls, loc, { Pitch = 0, Yaw = 0, Roll = 0 }) end)
   if not ok or not valid(pawn) then log("spawnFor: SpawnActor failed: " .. tostring(pawn)); return false end
   -- copy movement tuning from the host's (game-initialised) pawn so client prediction and server agree
@@ -163,13 +160,8 @@ local function spawnFor(pc)
     end
     log("spawnFor: movement/net settings copied from host pawn (" .. #diffs .. " differed): " .. table.concat(diffs, " "))
   end)
-  -- Joined players own their movement: the server accepts their position instead of correcting it.
-  -- This removes the rubber-banding a joiner sees on their own body (host still sees them smoothly).
-  pcall(function()
-    local cm = pawn.CharacterMovement
-    cm.bServerAcceptClientAuthoritativePosition = true
-    cm.bIgnoreClientMovementErrorChecksAndCorrection = true
-  end)
+  -- (client-authoritative movement is enabled later by ensureSmoothing, once the joiner has the world loaded;
+  -- doing it at spawn let a client that hadn't streamed the level yet fall through the floor and drag the server copy with it)
   local ok2, err = pcall(function() pc:Possess(pawn) end)
   log(string.format("spawnFor: spawned %s for %s possess_ok=%s %s", short(pawn), short(pc), tostring(ok2), ok2 and "" or tostring(err)))
   return ok2
@@ -187,14 +179,15 @@ local function spawnMissing()
   updateHostStatusLabel()
   local hostPc = UEHelpers.GetPlayerController()
   local okh, hostPawn = pcall(function() return hostPc.Pawn end)
-  if not (okh and valid(hostPawn)) then return end  -- host not in world yet
-  -- wait until the host's body has settled (not falling, not still at the origin) so joiners spawn on solid ground
-  local settled = false
-  pcall(function()
-    local l, v = hostPawn:K2_GetActorLocation(), hostPawn:GetVelocity()
-    settled = math.abs(v.Z) < 50 and not (math.abs(l.X) < 1 and math.abs(l.Y) < 1)
-  end)
-  if not settled then return end
+  -- remember the last place the host stood on solid ground; joiners spawn there even if the host is dead right now
+  if okh and valid(hostPawn) then
+    pcall(function()
+      local l, v = hostPawn:K2_GetActorLocation(), hostPawn:GetVelocity()
+      local dead = false; pcall(function() dead = hostPawn["PlayerDead?"] == true end)
+      if math.abs(v.Z) < 50 and not (math.abs(l.X) < 1 and math.abs(l.Y) < 1) and not dead then state.lastGood = { X = l.X, Y = l.Y, Z = l.Z } end
+    end)
+  end
+  if not state.lastGood then return end  -- host has not stood anywhere yet
   for _, pc in ipairs(liveInstances("BP_PlayerController_C")) do
     if pc:GetAddress() ~= hostPc:GetAddress() then
       local okp, pawn = pcall(function() return pc.Pawn end)
@@ -690,11 +683,28 @@ end, "late-hooks")
 -- ---------- network smoothing for other players' bodies (both sides) ----------
 -- A remote player's pawn is a simulated proxy here; without exponential smoothing it snaps to each net update.
 local smoothed = {}
+local firstSeen = {}
 local function ensureSmoothing()
   local myPawn; pcall(function() myPawn = UEHelpers.GetPlayerController().Pawn end)
   for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
     local key = p:GetAddress()
-    if not smoothed[key] and not (valid(myPawn) and myPawn:GetAddress() == key) then
+    local mine = valid(myPawn) and myPawn:GetAddress() == key
+    firstSeen[key] = firstSeen[key] or os.time()
+    -- server: joined players own their movement (no position corrections = no rubber-banding on their screen),
+    -- but only once they have had ~20s to stream the world in, and only while they are standing on something
+    if not mine and not isClient() and os.time() - firstSeen[key] >= 20 and not smoothed[key .. "auth"] then
+      pcall(function()
+        local v = p:GetVelocity()
+        if math.abs(v.Z) < 50 then
+          local cm = p.CharacterMovement
+          cm.bServerAcceptClientAuthoritativePosition = true
+          cm.bIgnoreClientMovementErrorChecksAndCorrection = true
+          smoothed[key .. "auth"] = true
+          log("movement: " .. p:GetFName():ToString() .. " is now client-authoritative")
+        end
+      end)
+    end
+    if not smoothed[key] and not mine then
       smoothed[key] = true
       pcall(function()
         local cm = p.CharacterMovement
@@ -707,8 +717,6 @@ local function ensureSmoothing()
         if cm.ListenServerNetworkSimulatedSmoothLocationTime < 0.1 then cm.ListenServerNetworkSimulatedSmoothLocationTime = 0.12 end
         if cm.ListenServerNetworkSimulatedSmoothRotationTime < 0.05 then cm.ListenServerNetworkSimulatedSmoothRotationTime = 0.08 end
         if cm.NetworkSimulatedSmoothLocationTime < 0.12 then cm.NetworkSimulatedSmoothLocationTime = 0.12 end
-        -- on the server, joined players' bodies are client-authoritative (no position corrections)
-        if not isClient() then cm.bServerAcceptClientAuthoritativePosition = true; cm.bIgnoreClientMovementErrorChecksAndCorrection = true end
         log("smoothing: " .. p:GetFName():ToString() .. " " .. before .. " -> mode=" .. tostring(cm.NetworkSmoothingMode) .. " minUpd=" .. tostring(p.MinNetUpdateFrequency))
       end)
     end
