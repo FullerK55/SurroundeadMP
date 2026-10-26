@@ -1,15 +1,15 @@
 -- SDMP: SurrounDead fan multiplayer mod (UE4SS Lua)
--- Console commands (open console with ~ or F10):
---   sdmp_host                 start a listen server (do this at the main menu, then click New Game / Continue)
---   sdmp_join <SteamID64>     join a host over Steam Sockets (do this at the main menu)
---   sdmp_join_ip <ip[:port]>  join over plain IP (fallback; host must use IP driver too)
---   sdmp_status               print world / net driver / pawn / connections
---   sdmp_spawn                (host) force-spawn pawns for any connected player without one
--- Keys: F7 = sdmp_host, F6 = sdmp_status
+-- Main menu gets "MP: HOST" and "MP: JOIN <ip>" entries. Keys as backup: F7 host, F9 join, F6 status.
+-- Console: sdmp_host, sdmp_join <SteamID64>, sdmp_join_ip <ip>, sdmp_status, sdmp_spawn, sdmp_levels
 -- Log: <Win64>/SDMP.log
+--
+-- THREADING RULE: UE4SS runs ExecuteWithDelay / LoopAsync callbacks on its own thread, and frees finished
+-- ExecuteWithDelay callbacks from a background GC ("Freed invalid callbacks"). Combining ExecuteWithDelay with
+-- ExecuteInGameThread crashed the game inside UE4SS about 20s after launch (1 in 3 launches). So this file uses
+-- exactly ONE LoopAsync, which once per second runs a tiny scheduler on the game thread. Nothing else is async.
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.5"
+local VERSION = "0.1.6"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -21,12 +21,36 @@ local function log(s)
 end
 
 local state = { hosting = false, joining = false, target = nil, spawned = {} }
-local menuUI = { host = nil, join = nil, menu = nil }   -- main-menu button instances (see menu section)
-local setButtonText                                     -- defined in the menu section
+local menuUI = { host = nil, join = nil, menu = nil }
+local setButtonText, cmdHost, cmdJoin   -- defined later
 
--- UE4SS timers (ExecuteWithDelay / LoopAsync) run on their own thread. Anything that touches
--- game objects (spawn, possess, level streaming, even reading actors) must hop to the game thread.
--- sdmp.ini next to this script: host_steamid / host_ip
+-- ---------- scheduler (all game-thread work goes through here) ----------
+local tasks = {}   -- { at = time, every = seconds|nil, fn = function, name = string, cancelled = bool }
+local function after(seconds, fn, name) local t = { at = os.time() + seconds, fn = fn, name = name or "?" }; tasks[#tasks+1] = t; return t end
+local function every(seconds, fn, name) local t = { at = os.time() + seconds, every = seconds, fn = fn, name = name or "?" }; tasks[#tasks+1] = t; return t end
+local function cancel(t) if t then t.cancelled = true end end
+local function runDueTasks()
+  local now = os.time()
+  local keep = {}
+  for _, t in ipairs(tasks) do
+    if not t.cancelled then
+      if now >= t.at then
+        local ok, err = pcall(t.fn)
+        if not ok then log("task '" .. t.name .. "' error: " .. tostring(err)) end
+        if t.every and not t.cancelled then t.at = now + t.every; keep[#keep+1] = t end
+      else
+        keep[#keep+1] = t
+      end
+    end
+  end
+  tasks = keep
+end
+LoopAsync(1000, function()
+  ExecuteInGameThread(function() local ok, err = pcall(runDueTasks); if not ok then print("[SDMP] scheduler error: " .. tostring(err) .. "\n") end end)
+  return false
+end)
+
+-- ---------- config ----------
 local function readConfig()
   local cfg = {}
   local dir = debug.getinfo(1, "S").source:match("^@?(.*[\\/])") or ""
@@ -38,16 +62,6 @@ local function readConfig()
   end
   f:close()
   return cfg
-end
-
-local function gt(fn)
-  return function(...)
-    local args = { ... }
-    ExecuteInGameThread(function()
-      local ok, err = pcall(fn, table.unpack(args))
-      if not ok then print("[SDMP] game-thread error: " .. tostring(err) .. "\n") end
-    end)
-  end
 end
 
 -- ---------- helpers ----------
@@ -97,11 +111,6 @@ local function status(tag)
     pcall(function() local d = c.Driver; drv = valid(d) and d:GetClass():GetFName():ToString() or "nil" end)
     s = s .. " [" .. c:GetClass():GetFName():ToString() .. " lastRecv=" .. lrt .. " channels=" .. chans .. " driver=" .. drv .. "]"
   end
-  local pend = liveInstances("PendingNetGame")
-  if #pend > 0 then
-    local d = "nil"; pcall(function() local nd = pend[1].NetDriver; d = valid(nd) and nd:GetClass():GetFName():ToString() or "nil" end)
-    s = s .. " pending=" .. #pend .. "(driver=" .. d .. ")"
-  end
   s = s .. " controllers=" .. #liveInstances("BP_PlayerController_C") .. " playerpawns=" .. #liveInstances("BP_PlayerCharacter_C")
   log(s)
   return s
@@ -112,7 +121,6 @@ local function spawnFor(pc)
   local world = UEHelpers.GetWorld()
   local cls = StaticFindObject(PLAYER_CLASS)
   if not valid(cls) then log("spawnFor: player class not found"); return false end
-  -- spawn next to the host's pawn, else at origin-ish
   local loc = { X = 0, Y = 0, Z = 300 }
   pcall(function()
     local hp = UEHelpers.GetPlayerController().Pawn
@@ -137,7 +145,7 @@ local function spawnMissing()
   updateHostStatusLabel()
   local hostPc = UEHelpers.GetPlayerController()
   local okh, hostPawn = pcall(function() return hostPc.Pawn end)
-  if not (okh and valid(hostPawn)) then return end  -- host not in world yet; wait
+  if not (okh and valid(hostPawn)) then return end  -- host not in world yet
   for _, pc in ipairs(liveInstances("BP_PlayerController_C")) do
     if pc:GetAddress() ~= hostPc:GetAddress() then
       local okp, pawn = pcall(function() return pc.Pawn end)
@@ -160,50 +168,41 @@ local function eachStreamingLevel(fn)
   levels:ForEach(function(i, el)
     local ls = el:get()
     if valid(ls) then
-      local function try(f, dflt) local ok, v = pcall(f); if ok then return v end; return dflt .. ":" .. tostring(v):sub(1, 40) end
-      -- loaded levels: the ULevel's outer is its package, e.g. "Package /Game/Levels/MainMenu"
+      local function try(f, dflt) local ok2, v = pcall(f); if ok2 then return v end; return dflt end
       local pkg = try(function() local lvl = ls:GetLoadedLevel(); if valid(lvl) then return lvl:GetOuter():GetFullName():gsub("^Package ", "") end; return "?" end, "?")
-      if pkg:sub(1, 1) == "?" or pkg == "None" then pkg = try(function() return ls.WorldAsset:ToString() end, "?") end
-      if pkg:sub(1, 1) == "?" or pkg == "None" then pkg = ls:GetFullName():gsub("^.*:", "") end
-      local loaded = try(function() return ls:IsLevelLoaded() end, "E")
-      local visible = try(function() return ls:IsLevelVisible() end, "E")
-      local sbl = try(function() return ls:ShouldBeLoaded() end, "E")
-      local sbv = try(function() return ls.bShouldBeVisible end, "E")
-      fn(ls, pkg, loaded == true, visible == true, sbl, sbv)
+      if pkg == "?" or pkg == "None" then pkg = ls:GetFullName():gsub("^.*:", "") end
+      local loaded = try(function() return ls:IsLevelLoaded() end, false)
+      local visible = try(function() return ls:IsLevelVisible() end, false)
+      fn(ls, pkg, loaded == true, visible == true)
     end
   end)
 end
 
 local function logLevels(tag)
-  eachStreamingLevel(function(ls, pkg, loaded, visible, sbl, sbv)
-    log(string.format("LEVELS[%s] %s loaded=%s visible=%s shouldLoad=%s shouldVis=%s", tag, pkg, tostring(loaded), tostring(visible), tostring(sbl), tostring(sbv)))
+  eachStreamingLevel(function(ls, pkg, loaded, visible)
+    log(string.format("LEVELS[%s] %s loaded=%s visible=%s", tag, pkg, tostring(loaded), tostring(visible)))
   end)
   local n = 0
-  local widgets = FindAllOf("UserWidget")
-  if widgets then for _, wdg in ipairs(widgets) do
-    if valid(wdg) and not wdg:GetFullName():find("Default__", 1, true) then
-      local inVp = false; pcall(function() inVp = wdg:IsInViewport() end)
-      if inVp then n = n + 1; log("WIDGET[" .. tag .. "] " .. wdg:GetClass():GetFName():ToString() .. " " .. short(wdg)) end
-    end
-  end end
+  for _, wdg in ipairs(liveInstances("UserWidget")) do
+    local inVp = false; pcall(function() inVp = wdg:IsInViewport() end)
+    if inVp then n = n + 1; log("WIDGET[" .. tag .. "] " .. wdg:GetClass():GetFName():ToString()) end
+  end
   log("WIDGETS[" .. tag .. "] in viewport: " .. n)
 end
 RegisterConsoleCommandHandler("sdmp_levels", function() logLevels("manual"); return true end)
 
--- client: once connected with a pawn, kill the menu UI and give input back to the game
--- Only the menu itself. The loading screen is the game's own transition widget and removing it mid-transition
--- crashed a client once; the game takes it down by itself.
+-- ---------- client side: take control after joining ----------
+-- Only the menu itself is removed. The loading screen is the game's own transition widget; removing it
+-- mid-transition crashed a client. The game takes it down by itself.
 local MENU_WIDGETS = { MenuWidget_C = true, MainMenu_C = true }
 local function clientTakeControl()
   local pc = UEHelpers.GetPlayerController()
   local ok, pawn = pcall(function() return pc.Pawn end)
   if not (ok and valid(pawn)) then state.pawnSince = nil; return end
-  -- let the engine finish the travel/streaming before we touch UI or input: wait a few seconds after the pawn appears
   state.pawnSince = state.pawnSince or os.time()
-  if os.time() - state.pawnSince < 4 then return end
-  -- the game's single-player start flow also runs on a client when the world level streams in, spawning a
-  -- local, non-networked player. Locally spawned actors on a client have local role Authority (3);
-  -- real networked pawns are AutonomousProxy (2) or SimulatedProxy (1). Destroy the phantoms.
+  if os.time() - state.pawnSince < 4 then return end   -- let the travel settle first
+  -- The game's single-player start flow also runs on a client when the world level streams in and spawns a
+  -- local, non-networked player. Locally spawned actors have local role Authority (3); real ones are proxies.
   for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
     local okr, role = pcall(function() return p:GetLocalRole() end)
     if okr and tonumber(role) == 3 then
@@ -212,21 +211,16 @@ local function clientTakeControl()
     end
   end
   local removed = 0
-  local widgets = FindAllOf("UserWidget")
-  if widgets then for _, wdg in ipairs(widgets) do
-    if valid(wdg) and not wdg:GetFullName():find("Default__", 1, true) then
-      local cls = wdg:GetClass():GetFName():ToString()
-      local inVp = false; pcall(function() inVp = wdg:IsInViewport() end)
-      if MENU_WIDGETS[cls] and inVp then
-        local okr = pcall(function() wdg:RemoveFromParent() end)
-        if okr then removed = removed + 1; log("client: removed menu widget " .. cls) end
-      end
+  for _, wdg in ipairs(liveInstances("UserWidget")) do
+    local cls = wdg:GetClass():GetFName():ToString()
+    local inVp = false; pcall(function() inVp = wdg:IsInViewport() end)
+    if MENU_WIDGETS[cls] and inVp then
+      if pcall(function() wdg:RemoveFromParent() end) then removed = removed + 1; log("client: removed menu widget " .. cls) end
     end
-  end end
+  end
   if removed > 0 or not state.inputFixed then
     local okm, errm = pcall(function()
-      local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
-      wbl:SetInputMode_GameOnly(pc, false)
+      StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary"):SetInputMode_GameOnly(pc, false)
       pc.bShowMouseCursor = false
       log("client: input mode set to game-only")
     end)
@@ -235,14 +229,14 @@ local function clientTakeControl()
   end
 end
 
--- client: make sure the world sub-level streams in and the menu sub-level goes away.
--- The game's own Event_LoadLevel usually does both on the client a few seconds after the join; we only step in
--- if it hasn't, and never during the transition (unloading MainMenu while its level Blueprint runs crashed a client).
+-- The game's own Event_LoadLevel usually streams the world in and the menu level out on the client by itself.
+-- Step in only if it hasn't, and never during the transition (unloading MainMenu while its level Blueprint
+-- was running crashed a client).
 local function ensureLevelLoaded()
   if not state.pawnSince or os.time() - state.pawnSince < 6 then return end
-  eachStreamingLevel(function(ls, pkg, loaded, visible, sbl, sbv)
+  eachStreamingLevel(function(ls, pkg, loaded, visible)
     if pkg:find(LEVEL_NAME, 1, true) and not (loaded and visible) then
-      log("client: requesting stream-in of " .. pkg .. " (loaded=" .. tostring(loaded) .. " visible=" .. tostring(visible) .. ")")
+      log("client: requesting stream-in of " .. pkg)
       pcall(function() ls:SetShouldBeLoaded(true); ls:SetShouldBeVisible(true) end)
     elseif pkg:find("MainMenu", 1, true) and (loaded or visible) then
       log("client: unloading " .. pkg)
@@ -252,8 +246,10 @@ local function ensureLevelLoaded()
 end
 
 -- ---------- net driver selection ----------
--- The game's GameNetDriver is SteamSockets (fallback IpNetDriver). Rewrite the definition at runtime so
--- the next `open` uses plain IP while Steam stays running (needs VPN or port-forward UDP 7777 on the host).
+-- GameNetDriver is SteamSockets by default. Rewrite the definition so the next `open` uses plain IP.
+-- (Only works when the game was NOT launched through Steam; see the launcher .bat.)
+local DRIVER_STEAM = "/Script/SteamSockets.SteamSocketsNetDriver"
+local DRIVER_IP = "/Script/OnlineSubsystemUtils.IpNetDriver"
 local function setNetDriver(className)
   local targets = { StaticFindObject("/Script/Engine.Default__GameEngine") }
   pcall(function() targets[#targets+1] = UEHelpers.GetEngine() end)
@@ -272,20 +268,15 @@ local function setNetDriver(className)
     end
   end
 end
-local DRIVER_STEAM = "/Script/SteamSockets.SteamSocketsNetDriver"
-local DRIVER_IP = "/Script/OnlineSubsystemUtils.IpNetDriver"
 RegisterConsoleCommandHandler("sdmp_driver", function(full, params)
   local which = (params[1] or ""):lower()
   if which == "ip" then setNetDriver(DRIVER_IP) elseif which == "steam" then setNetDriver(DRIVER_STEAM) else log("usage: sdmp_driver ip|steam") end
   return true
 end)
 
--- ---------- commands (forward declarations; defined below) ----------
-local cmdHost, cmdJoin
-
 -- ---------- main menu buttons ----------
--- Two instances of the game's own ButtonWidget_C are added under the Quit button of MenuWidget_C.
--- Clicks are detected by hooking ButtonWidget_C's click event and comparing the instance.
+-- Two instances of the game's own ButtonWidget_C go under the Quit button of MenuWidget_C.
+-- Clicks are detected by hooking ButtonWidget_C's click event and comparing the instance address.
 local BTN_CLASS = "/Game/UI/Menus/ButtonWidget.ButtonWidget_C"
 setButtonText = function(w, label)
   pcall(function() w.Text = FText(label) end)
@@ -293,10 +284,8 @@ setButtonText = function(w, label)
 end
 
 local function findMenuWidget()
-  local widgets = FindAllOf("UserWidget")
-  if not widgets then return nil end
-  for _, w in ipairs(widgets) do
-    if valid(w) and not w:GetFullName():find("Default__", 1, true) and w:GetClass():GetFName():ToString() == "MenuWidget_C" then
+  for _, w in ipairs(liveInstances("UserWidget")) do
+    if w:GetClass():GetFName():ToString() == "MenuWidget_C" then
       local inVp = false; pcall(function() inVp = w:IsInViewport() end)
       if inVp then return w end
     end
@@ -312,57 +301,39 @@ local function makeMenuButton(menu, label, refButton, index)
   if not valid(w) then error("Create() returned nothing") end
   local parent = refButton:GetParent()
   local pname = valid(parent) and parent:GetClass():GetFName():ToString() or "?"
-  if pname == "CanvasPanel" then
+  if pname == "VerticalBox" then
+    parent:AddChildToVerticalBox(w)
+  elseif pname == "CanvasPanel" then
     local refSlot = refButton.Slot
     local pos, size = refSlot:GetPosition(), refSlot:GetSize()
     local slot = parent:AddChildToCanvas(w)
     slot:SetAutoSize(false)
     slot:SetPosition({ X = pos.X, Y = pos.Y + (size.Y + 6) * index })
     slot:SetSize({ X = size.X, Y = size.Y })
-    log(string.format("menu: added '%s' at %.0f,%.0f size %.0fx%.0f (ref %s)", label, pos.X, pos.Y + (size.Y + 6) * index, size.X, size.Y, refButton:GetFName():ToString()))
-  elseif pname == "VerticalBox" then
-    parent:AddChildToVerticalBox(w)
-    log("menu: added '" .. label .. "' to vertical box")
   else
     w:AddToViewport(50)
-    log("menu: parent is " .. pname .. ", added '" .. label .. "' to viewport instead")
   end
   setButtonText(w, label)
+  log("menu: added '" .. label .. "' (parent " .. pname .. ")")
   return w
 end
 
 local function injectMenuButtons()
-  local nd = netDriver()
-  if nd then
-    -- hosting (or joined): show a status line on the rebuilt menu instead of the buttons
-    if isClient() then return end
-    local menu = findMenuWidget()
-    if not menu then return end
-    if menuUI.statusMenu and valid(menuUI.statusMenu) and menuUI.statusMenu:GetAddress() == menu:GetAddress() and valid(menuUI.status) then return end
-    local ok, err = pcall(function()
-      menuUI.status = makeMenuButton(menu, "MP: HOSTING OK - now click New or Load", menu.Quit, 1)
-      menuUI.statusMenu = menu
-    end)
-    if not ok then log("menu: status inject failed: " .. tostring(err)) end
-    return
-  end
   local menu = findMenuWidget()
-  if not menu then
-    if not menuUI.loggedNoMenu then menuUI.loggedNoMenu = true
-      local n = 0; local ws = FindAllOf("UserWidget"); if ws then for _, w in ipairs(ws) do if valid(w) and not w:GetFullName():find("Default__", 1, true) then n = n + 1; log("menu: widget seen: " .. w:GetClass():GetFName():ToString()) end end end
-      log("menu: MenuWidget_C not in viewport yet (" .. n .. " widgets alive)")
-    end
+  if not menu then return end
+  if netDriver() then
+    if isClient() then return end
+    if menuUI.statusMenu and valid(menuUI.statusMenu) and menuUI.statusMenu:GetAddress() == menu:GetAddress() and valid(menuUI.status) then return end
+    menuUI.status = makeMenuButton(menu, "MP: HOSTING OK - now click New or Load", menu.Quit, 1)
+    menuUI.statusMenu = menu
     return
   end
   if menuUI.menu and valid(menuUI.menu) and menuUI.menu:GetAddress() == menu:GetAddress() and valid(menuUI.host) and valid(menuUI.join) then return end
-  local ok, err = pcall(function()
-    local ref = menu.Quit
-    if not valid(ref) then error("Quit button not found on menu") end
-    menuUI.host = makeMenuButton(menu, "MP: HOST", ref, 1)
-    menuUI.join = makeMenuButton(menu, "MP: JOIN " .. (readConfig().host_ip or "?"), ref, 2)
-    menuUI.menu = menu
-  end)
-  if not ok then log("menu: inject failed: " .. tostring(err)) end
+  local ref = menu.Quit
+  if not valid(ref) then error("Quit button not found on menu") end
+  menuUI.host = makeMenuButton(menu, "MP: HOST", ref, 1)
+  menuUI.join = makeMenuButton(menu, "MP: JOIN " .. (readConfig().host_ip or "?"), ref, 2)
+  menuUI.menu = menu
 end
 
 local function onMenuButtonClicked(w)
@@ -378,28 +349,11 @@ local function onMenuButtonClicked(w)
   end
 end
 
-ExecuteWithDelay(12000, gt(function()
-  local ok, err = pcall(function()
-    RegisterHook(BTN_CLASS .. ":BndEvt__ButtonWidget_Button_K2Node_ComponentBoundEvent_0_OnButtonClickedEvent__DelegateSignature", function(ctx)
-      local w; pcall(function() w = ctx:get() end)
-      onMenuButtonClicked(w)
-    end)
-  end)
-  log(ok and "menu: click hook installed" or ("menu: click hook failed: " .. tostring(err):sub(1, 100)))
-end))
-LoopAsync(2000, function()
-  ExecuteInGameThread(function()
-    local ok, err = pcall(injectMenuButtons)
-    if not ok and not menuUI.loggedErr then menuUI.loggedErr = true; log("menu: inject loop error: " .. tostring(err)) end
-  end)
-  return false
-end)
-
 -- ---------- commands ----------
 cmdHost = function()
   local nd = netDriver()
   if nd and not isClient() then
-    log("sdmp_host: already hosting, not re-opening (press F6 for status)")
+    log("sdmp_host: already hosting (press F6 for status)")
     status("host")
     return true
   end
@@ -407,26 +361,25 @@ cmdHost = function()
   consoleCmd("open PersistentLevel?listen")
   state.hosting = true
   state.hostAttempts = (state.hostAttempts or 0) + 1
-  ExecuteWithDelay(8000, gt(function()
+  after(8, function()
     status("host")
-    local nd = netDriver()
-    if nd and not isClient() then
-      log("HOSTING OK: listen server is up (" .. nd:GetClass():GetFName():ToString() .. "). Now click New Game / Continue.")
-      if valid(menuUI.host) then setButtonText(menuUI.host, "MP: HOSTING OK - now click New Game / Continue") end
+    local nd2 = netDriver()
+    if nd2 and not isClient() then
+      log("HOSTING OK: listen server is up (" .. nd2:GetClass():GetFName():ToString() .. "). Now click New Game / Continue.")
+      if valid(menuUI.host) then setButtonText(menuUI.host, "MP: HOSTING OK - now click New or Load") end
       state.hostAttempts = 0
     elseif state.hostAttempts < 4 then
       log("listen did not come up, retrying in 5s (attempt " .. (state.hostAttempts + 1) .. "/4)")
-      ExecuteWithDelay(5000, function() if state.useIpDriver then setNetDriver(DRIVER_IP) end; cmdHost() end)
+      after(5, function() if state.useIpDriver then setNetDriver(DRIVER_IP) end; cmdHost() end, "host-retry")
     else
       log("HOSTING FAILED after 4 attempts. Restart the game, wait on the main menu 60s, try again.")
       state.hostAttempts = 0
     end
-  end))
+  end, "host-check")
   return true
 end
 
--- did the host answer yet? A connection's LastReceiveTime is stamped at creation, so a value alone means
--- nothing; it only moves when a packet actually arrives. Compare against the first value we saw.
+-- did the host answer? LastReceiveTime is stamped at creation; it only moves when a packet arrives.
 local seenRecv = {}
 local function hostReplied()
   if isClient() then return true end
@@ -441,37 +394,34 @@ local function hostReplied()
   return false
 end
 
+local joinTask
 local function joinProgress(url)
   local started = os.time()
-  local found, finished = false, false
+  local found = false
   seenRecv = {}
-  LoopAsync(1000, function()
-    if finished then return true end
-    ExecuteInGameThread(function()
-      if finished then return end
-      local elapsed = os.time() - started
-      if isClient() then
-        local ok, pawn = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
-        if ok and valid(pawn) then log("JOIN: connected and in the world"); finished = true; return end
-        if not found then found = true; log("JOIN: host found, loading world...") end
-        if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
-        return
-      end
-      if hostReplied() then
-        if not found then found = true; log("JOIN: host found (" .. url .. "), loading...") end
-        if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
-        if elapsed > 90 then log("JOIN: stuck after host reply for 90s, giving up"); state.joining = false; finished = true end
-        return
-      end
-      if elapsed >= 15 then
-        log("JOIN: HOST NOT FOUND after 15s (" .. url .. "). Is the host past HOSTING OK? Is Radmin green?")
-        if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST NOT FOUND - click to retry") end
-        state.joining = false; finished = true; return
-      end
-      if valid(menuUI.join) then setButtonText(menuUI.join, "MP: CONNECTING... " .. elapsed .. "s") end
-    end)
-    return false
-  end)
+  cancel(joinTask)
+  joinTask = every(1, function()
+    local elapsed = os.time() - started
+    if isClient() then
+      local ok, pawn = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
+      if ok and valid(pawn) then log("JOIN: connected and in the world"); cancel(joinTask); return end
+      if not found then found = true; log("JOIN: host found, loading world...") end
+      if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
+      return
+    end
+    if hostReplied() then
+      if not found then found = true; log("JOIN: host found (" .. url .. "), loading...") end
+      if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
+      if elapsed > 90 then log("JOIN: stuck after host reply for 90s, giving up"); state.joining = false; cancel(joinTask) end
+      return
+    end
+    if elapsed >= 15 then
+      log("JOIN: HOST NOT FOUND after 15s (" .. url .. "). Is the host past HOSTING OK? Is Radmin green?")
+      if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST NOT FOUND - click to retry") end
+      state.joining = false; cancel(joinTask); return
+    end
+    if valid(menuUI.join) then setButtonText(menuUI.join, "MP: CONNECTING... " .. elapsed .. "s") end
+  end, "join-progress")
 end
 
 cmdJoin = function(target, viaIp)
@@ -481,15 +431,13 @@ cmdJoin = function(target, viaIp)
   state.joining = true; state.target = url
   consoleCmd("open " .. url)
   joinProgress(url)
-  for _, d in ipairs({ 5000, 10000, 20000, 40000 }) do ExecuteWithDelay(d, gt(function() status("join+" .. (d / 1000) .. "s") end)) end
-  ExecuteWithDelay(12000, gt(function() logLevels("join+12s") end))
-  ExecuteWithDelay(45000, gt(function() logLevels("join+45s") end))
+  after(5, function() status("join+5s") end, "join-status")
+  after(40, function() status("join+40s") end, "join-status")
   return true
 end
 
 RegisterConsoleCommandHandler("sdmp_host", function() state.useIpDriver = true; setNetDriver(DRIVER_IP); return cmdHost() end)
 RegisterConsoleCommandHandler("sdmp_host_steam", function() state.useIpDriver = false; setNetDriver(DRIVER_STEAM); return cmdHost() end)
-RegisterConsoleCommandHandler("sdmp_host_ip", function() state.useIpDriver = true; setNetDriver(DRIVER_IP); return cmdHost() end)
 RegisterConsoleCommandHandler("sdmp_join", function(full, params) return cmdJoin(params[1], false) end)
 RegisterConsoleCommandHandler("sdmp_join_ip", function(full, params) setNetDriver(DRIVER_IP); return cmdJoin(params[1], true) end)
 RegisterConsoleCommandHandler("sdmp_status", function() status("manual"); return true end)
@@ -497,28 +445,23 @@ RegisterConsoleCommandHandler("sdmp_spawn", function() state.spawned = {}; spawn
 RegisterKeyBind(Key.F7, {}, function() log("F7: host with IP driver"); state.useIpDriver = true; setNetDriver(DRIVER_IP); cmdHost() end)
 RegisterKeyBind(Key.F7, {ModifierKey.CONTROL}, function() log("Ctrl+F7: host with Steam Sockets driver"); state.useIpDriver = false; setNetDriver(DRIVER_STEAM); cmdHost() end)
 RegisterKeyBind(Key.F6, {}, function() status("F6") end)
-
--- no-console path: sdmp.ini next to this script holds the host's SteamID / IP; F8 joins it (readConfig is defined near the top)
 RegisterKeyBind(Key.F8, {}, function()
   local cfg = readConfig()
   if cfg.host_steamid then log("F8: joining host_steamid from sdmp.ini"); cmdJoin(cfg.host_steamid, false)
-  elseif cfg.host_ip then log("F8: joining host_ip from sdmp.ini"); cmdJoin(cfg.host_ip, true)
-  else log("F8: no host_steamid or host_ip in sdmp.ini") end
+  else log("F8: no host_steamid in sdmp.ini") end
 end)
 RegisterKeyBind(Key.F9, {}, function()
   local cfg = readConfig()
   if cfg.host_ip then log("F9: joining host_ip from sdmp.ini (IP driver)"); setNetDriver(DRIVER_IP); cmdJoin(cfg.host_ip, true)
   else log("F9: no host_ip in sdmp.ini") end
 end)
-RegisterKeyBind(Key.F7, {ModifierKey.SHIFT}, function() log("Shift+F7: host with IP driver"); state.useIpDriver = true; setNetDriver(DRIVER_IP); cmdHost() end)
 
--- ---------- hooks + background loop ----------
+-- ---------- hooks (native engine functions exist at load time) ----------
 pcall(function()
   RegisterHook("/Script/Engine.GameModeBase:K2_PostLogin", function(ctx, newPlayer)
     local who = "?"; pcall(function() who = short(newPlayer:get()) end)
     log("PLAYER JOINED: " .. who)
-    ExecuteWithDelay(3000, gt(spawnMissing))
-    ExecuteWithDelay(10000, gt(spawnMissing))
+    after(3, spawnMissing, "spawn-after-login")
   end)
 end)
 pcall(function()
@@ -527,14 +470,9 @@ pcall(function()
     log("PLAYER LEFT: " .. who); state.spawned[who] = nil
   end)
 end)
-
--- connection-failure diagnostics (client side)
 for _, fn in ipairs({
   "/Script/Engine.PlayerController:ClientReturnToMainMenuWithTextReason",
-  "/Script/Engine.PlayerController:ClientTravelInternal",
-  "/Script/Engine.PlayerController:ClientSetHUD",
   "/Script/Engine.PlayerController:ClientRestart",
-  "/Script/Engine.PlayerController:ClientGotoState",
 }) do
   pcall(function()
     RegisterHook(fn, function(ctx, ...)
@@ -545,38 +483,41 @@ for _, fn in ipairs({
   end)
 end
 
-LoopAsync(5000, function()
-  ExecuteInGameThread(function()
-    if state.hosting then pcall(spawnMissing) end
-    if state.joining and isClient() then pcall(ensureLevelLoaded); pcall(clientTakeControl) end
+-- Blueprint classes are not loaded when this script starts: register those hooks later, from the scheduler.
+after(12, function()
+  local ok, err = pcall(function()
+    RegisterHook(BTN_CLASS .. ":BndEvt__ButtonWidget_Button_K2Node_ComponentBoundEvent_0_OnButtonClickedEvent__DelegateSignature", function(ctx)
+      local w; pcall(function() w = ctx:get() end)
+      onMenuButtonClicked(w)
+    end)
   end)
-  return false
-end)
-
--- trace the game's own start/spawn flow so we can see what runs on a client after joining.
--- Blueprint classes are not loaded when this script starts, so register after a delay, on the game thread.
-ExecuteWithDelay(12000, gt(function()
+  log(ok and "menu: click hook installed" or ("menu: click hook failed: " .. tostring(err):sub(1, 100)))
   for _, fn in ipairs({
     "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Event_LoadLevel",
     "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Survival_SpawnPlayer",
-    "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:GameMode_SpawnPlayer",
-    "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Survival_Respawn",
     "/Game/Blueprints/BP_PlayerController.BP_PlayerController_C:ReceivePossess",
-    "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:ReceiveBeginPlay",
   }) do
-    local ok, err = pcall(function()
+    local ok2, err2 = pcall(function()
       RegisterHook(fn, function(ctx, ...)
         local who = ""; pcall(function() who = short(ctx:get()) end)
-        local parts = {}
-        for _, a in ipairs({...}) do pcall(function() local v = a:get(); local ok2, s = pcall(function() return v:GetFullName() end); parts[#parts+1] = ok2 and s or tostring(v) end) end
-        log("GAME-FLOW " .. fn:gsub("^.*:", "") .. " self=" .. who .. " [" .. table.concat(parts, ", ") .. "]" .. (isClient() and " (CLIENT)" or ""))
+        log("GAME-FLOW " .. fn:gsub("^.*:", "") .. " self=" .. who .. (isClient() and " (CLIENT)" or ""))
       end)
     end)
-    if not ok then log("hook failed: " .. fn .. " : " .. tostring(err):sub(1, 80)) end
+    if not ok2 then log("hook failed: " .. fn .. " : " .. tostring(err2):sub(1, 80)) end
   end
-end))
+end, "late-hooks")
 
--- sdmp_spawntest: (host, in world) spawn an unpossessed player pawn next to you to validate the spawn path
+-- ---------- periodic work ----------
+every(2, function()
+  local ok, err = pcall(injectMenuButtons)
+  if not ok and not menuUI.loggedErr then menuUI.loggedErr = true; log("menu: inject error: " .. tostring(err)) end
+end, "menu")
+every(5, function()
+  if state.hosting then pcall(spawnMissing) end
+  if state.joining and isClient() then pcall(ensureLevelLoaded); pcall(clientTakeControl) end
+end, "main")
+
+-- ---------- dev helpers ----------
 local function spawnTest()
   local world = UEHelpers.GetWorld()
   local cls = StaticFindObject(PLAYER_CLASS)
@@ -585,58 +526,44 @@ local function spawnTest()
   local l = hp:K2_GetActorLocation()
   local ok, pawn = pcall(function() return world:SpawnActor(cls, { X = l.X + 250, Y = l.Y, Z = l.Z + 50 }, { Pitch = 0, Yaw = 0, Roll = 0 }) end)
   log(string.format("spawntest: ok=%s result=%s", tostring(ok), ok and short(pawn) or tostring(pawn)))
-  if ok and valid(pawn) then
-    pcall(function() local l2 = pawn:K2_GetActorLocation(); log(string.format("spawntest: pawn at %.0f %.0f %.0f, host at %.0f %.0f %.0f", l2.X, l2.Y, l2.Z, l.X, l.Y, l.Z)) end)
-    local okc, ctrl = pcall(function() return pawn.Controller end)
-    log("spawntest: pawn.Controller=" .. ((okc and valid(ctrl)) and short(ctrl) or "nil") .. " (expected nil, unpossessed)")
-  end
   return true
 end
 RegisterConsoleCommandHandler("sdmp_spawntest", function() spawnTest(); return true end)
 
--- dev: env SDMP_DEV=host        -> auto-host at 35s, then enter the world via the game's own Event_LoadLevel at 50s
---      env SDMP_DEV=join:<url>  -> auto sdmp_join_ip <url> at 45s   (two-instance loopback test on one PC)
+-- env SDMP_DEV=hostip -> auto-host at 35s, enter the world at 50s;  SDMP_DEV=joinip:<ip> -> auto-join at 45s
 do local role = os.getenv("SDMP_DEV")
   if role and role ~= "" then
     logf = io.open("SDMP_" .. role:gsub("[^%w]", "_") .. ".log", "a")
     log("SDMP_DEV=" .. role)
     if role == "host" or role == "hostip" then
-      ExecuteWithDelay(35000, gt(function() if role == "hostip" then state.useIpDriver = true; setNetDriver(DRIVER_IP) end; cmdHost() end))
-      ExecuteWithDelay(50000, gt(function()
+      after(35, function() if role == "hostip" then state.useIpDriver = true; setNetDriver(DRIVER_IP) end; cmdHost() end, "dev-host")
+      after(50, function()
         local ok, err = pcall(function() UEHelpers.GetGameInstance():Event_LoadLevel(FName(LEVEL_NAME)) end)
         log("dev host: Event_LoadLevel(" .. LEVEL_NAME .. ") ok=" .. tostring(ok) .. " " .. tostring(err))
-      end))
-      ExecuteWithDelay(75000, gt(function() logLevels("host+75s") end))
-      LoopAsync(15000, function() ExecuteInGameThread(function() status("dev-host") end); return false end)
+      end, "dev-enter")
+      every(15, function() status("dev-host") end, "dev-status")
     elseif role:sub(1, 5) == "join:" then
-      ExecuteWithDelay(45000, gt(function() cmdJoin(role:sub(6), true) end))
-      LoopAsync(15000, function() ExecuteInGameThread(function() status("dev-join") end); return false end)
+      after(45, function() cmdJoin(role:sub(6), true) end, "dev-join")
+      every(15, function() status("dev-join") end, "dev-status")
     elseif role:sub(1, 7) == "joinip:" then
-      ExecuteWithDelay(45000, gt(function() setNetDriver(DRIVER_IP); cmdJoin(role:sub(8), true) end))
-      LoopAsync(15000, function() ExecuteInGameThread(function() status("dev-join") end); return false end)
+      after(45, function() setNetDriver(DRIVER_IP); cmdJoin(role:sub(8), true) end, "dev-join")
+      every(15, function() status("dev-join") end, "dev-status")
     end
   end
 end
 
--- dev convenience: if <Win64>/SDMP_autohost.txt exists, host automatically 35s after boot,
--- then run one spawn test as soon as the host has a pawn (i.e. after New Game / Continue)
+-- <Win64>/SDMP_autohost.txt ("ip 25" = IP driver, host after 25s): host automatically, spawntest once in the world
 do local f = io.open("SDMP_autohost.txt", "r"); if f then
   local mode = (f:read("*l") or ""):gsub("%s", ""); f:close()
   local delay = tonumber(mode:match("(%d+)")) or 35
   local useIp = mode:find("ip") ~= nil
-  log("SDMP_autohost.txt present: hosting in " .. delay .. "s (ip=" .. tostring(useIp) .. "), spawntest after New Game")
-  ExecuteWithDelay(delay * 1000, gt(function() if useIp then state.useIpDriver = true; setNetDriver(DRIVER_IP) end; cmdHost() end))
-  local done = false
-  LoopAsync(5000, function()
-    if done then return true end
-    ExecuteInGameThread(function()
-      if done then return end
-      local ok, hp = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
-      if ok and valid(hp) then done = true; status("in-world"); spawnTest() end
-    end)
-    return false
-  end)
+  log("SDMP_autohost.txt present: hosting in " .. delay .. "s (ip=" .. tostring(useIp) .. ")")
+  after(delay, function() if useIp then state.useIpDriver = true; setNetDriver(DRIVER_IP) end; cmdHost() end, "autohost")
+  local t; t = every(5, function()
+    local ok, hp = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
+    if ok and valid(hp) then status("in-world"); spawnTest(); cancel(t) end
+  end, "autohost-spawntest")
 end end
 
 do local cfg = readConfig(); log("sdmp.ini: host_steamid=" .. tostring(cfg.host_steamid) .. " host_ip=" .. tostring(cfg.host_ip)) end
-log("SDMP v" .. VERSION .. " loaded. Keys: F7=host  F8=join host from sdmp.ini  F6=status. Console: sdmp_host, sdmp_join <SteamID64>, sdmp_status")
+log("SDMP v" .. VERSION .. " loaded. Menu: MP: HOST / MP: JOIN. Keys: F7 host, F9 join, F6 status.")
