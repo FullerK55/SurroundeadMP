@@ -684,8 +684,9 @@ end, "late-hooks")
 -- A remote player's pawn is a simulated proxy here; without exponential smoothing it snaps to each net update.
 local smoothed = {}
 local firstSeen = {}
+local hostPcCache
 local function ensureSmoothing()
-  local myPawn; pcall(function() myPawn = UEHelpers.GetPlayerController().Pawn end)
+  local myPawn; pcall(function() hostPcCache = UEHelpers.GetPlayerController(); myPawn = hostPcCache.Pawn end)
   for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
     local key = p:GetAddress()
     local mine = valid(myPawn) and myPawn:GetAddress() == key
@@ -695,7 +696,9 @@ local function ensureSmoothing()
     if not mine and not isClient() and os.time() - firstSeen[key] >= 20 and not smoothed[key .. "auth"] then
       pcall(function()
         local v = p:GetVelocity()
-        if math.abs(v.Z) < 50 then
+        local ctrl = p.Controller
+        local remote = valid(ctrl) and valid(hostPcCache) and ctrl:GetAddress() ~= hostPcCache:GetAddress()
+        if remote and math.abs(v.Z) < 50 then
           local cm = p.CharacterMovement
           cm.bServerAcceptClientAuthoritativePosition = true
           cm.bIgnoreClientMovementErrorChecksAndCorrection = true
@@ -833,7 +836,7 @@ do local role = os.getenv("SDMP_DEV")
       end, "dev-rpc-report")
       -- dev: 110s in, mark the first joined player's pawn dead on the server to exercise our respawn
       if os.getenv("SDMP_DEVKILL") == "1" then
-        after(110, function()
+        after(80, function()
           local hostPc = UEHelpers.GetPlayerController()
           for _, pc in ipairs(liveInstances("BP_PlayerController_C")) do
             if pc:GetAddress() ~= hostPc:GetAddress() then
