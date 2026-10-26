@@ -179,6 +179,22 @@ Fix: ONE `LoopAsync(1000)` that runs a Lua scheduler (`after`/`every`/`cancel`) 
 per tick; no ExecuteWithDelay anywhere. 5/5 cold launches clean, loopback clean. Rule for this mod: never use
 ExecuteWithDelay, never nest ExecuteInGameThread inside another UE4SS async callback except the scheduler's.
 
+## Death, respawn and "jumpy" movement (0.1.8, 2026-10-25 21:10-21:40)
+
+- Tried using the game's own `Svr_RequestRespawn_Random` on the joined controller: it runs `Survival_Respawn` on the
+  GameInstance, which is hard-wired to player controller 0, so it respawns/resets the HOST and the joiner gets nothing.
+  That is also what happened when the friend clicked Respawn on his death screen ("I can't do anything"). Rejected.
+- Host-side respawn: `spawnMissing` treats a pawn with `PlayerDead?` == true as missing; after 6s it UnPossesses the
+  corpse and spawns a fresh body. Verified in loopback (pawn flagged dead -> new pawn possessed by the client 12s later).
+- Client side: the death/respawn widgets (`RespawnScreen_C`, `BP_RespawnHUD_C`, `ScreenPermadeath_C`,
+  `QuitWidgetRespawn_C`) are removed on sight so their buttons can't reset the host.
+- Joiners only spawn once the host's body is settled (not falling, not at the origin); the dev entry path puts the
+  host at the origin falling forever, so the dev host now teleports to 165450,49719,1600.
+- Jitter hunt: movement component settings on the spawned pawn are identical to the host's (0 differences);
+  no `Svr_SetActorLocation` spam; loopback walking shows host/client positions agreeing. ENetworkSmoothingMode is
+  0 Disabled / 1 Linear / 2 Exponential and the game uses 2. Raised ListenServerNetworkSimulatedSmoothLocationTime
+  0.04 -> 0.12 and MinNetUpdateFrequency 2 -> 30 on remote pawns; real-latency effect still to be confirmed with the friend.
+
 ## Plan
 
 1. Host test, one machine: in the UE4SS console run `open PersistentLevel?listen` from the main menu and check the log for a

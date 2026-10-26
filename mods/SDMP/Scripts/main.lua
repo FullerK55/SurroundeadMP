@@ -9,7 +9,7 @@
 -- exactly ONE LoopAsync, which once per second runs a tiny scheduler on the game thread. Nothing else is async.
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.7"
+local VERSION = "0.1.8"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -117,7 +117,21 @@ local function status(tag)
 end
 
 -- ---------- host side: spawn pawns for joined players ----------
+-- spawn method: "rpc" = ask the game's own controller respawn (Svr_RequestRespawn_Random, written by the dev as a
+-- server RPC); "spawn" = generic SpawnActor + Possess (bare body, no game setup). Env SDMP_SPAWN or sdmp.ini spawn_method.
+local function spawnMethod()
+  -- NOTE: "rpc" was tested and rejected: the game's Survival_Respawn is hard-wired to player controller 0,
+  -- so a remote controller's request respawns/resets the HOST instead. Default is the generic spawn.
+  local m = os.getenv("SDMP_SPAWN") or readConfig().spawn_method or "spawn"
+  return m
+end
+
 local function spawnFor(pc)
+  if spawnMethod() == "rpc" then
+    local ok, err = pcall(function() pc:Svr_RequestRespawn_Random() end)
+    log(string.format("spawnFor(rpc): Svr_RequestRespawn_Random on %s ok=%s %s", short(pc), tostring(ok), ok and "" or tostring(err)))
+    return ok
+  end
   local world = UEHelpers.GetWorld()
   local cls = StaticFindObject(PLAYER_CLASS)
   if not valid(cls) then log("spawnFor: player class not found"); return false end
@@ -128,6 +142,23 @@ local function spawnFor(pc)
   end)
   local ok, pawn = pcall(function() return world:SpawnActor(cls, loc, { Pitch = 0, Yaw = 0, Roll = 0 }) end)
   if not ok or not valid(pawn) then log("spawnFor: SpawnActor failed: " .. tostring(pawn)); return false end
+  -- copy movement tuning from the host's (game-initialised) pawn so client prediction and server agree
+  pcall(function()
+    local hp = UEHelpers.GetPlayerController().Pawn
+    if not valid(hp) then return end
+    local src, dst = hp.CharacterMovement, pawn.CharacterMovement
+    local diffs = {}
+    for _, p in ipairs({ "MaxWalkSpeed", "MaxWalkSpeedCrouched", "MaxAcceleration", "BrakingDecelerationWalking", "GroundFriction", "JumpZVelocity", "GravityScale", "NetworkSmoothingMode", "NetworkSimulatedSmoothLocationTime", "NetworkSimulatedSmoothRotationTime", "ListenServerNetworkSimulatedSmoothLocationTime", "ListenServerNetworkSimulatedSmoothRotationTime", "NetworkMaxSmoothUpdateDistance", "NetworkNoSmoothUpdateDistance", "bOrientRotationToMovement", "bUseControllerDesiredRotation", "bNetworkSkipProxyPredictionOnNetUpdate" }) do
+      pcall(function()
+        local a, b = src[p], dst[p]
+        if tostring(a) ~= tostring(b) then diffs[#diffs+1] = p .. ":" .. tostring(b) .. "->" .. tostring(a); dst[p] = a end
+      end)
+    end
+    for _, p in ipairs({ "bUseControllerRotationYaw", "bUseControllerRotationPitch", "NetUpdateFrequency", "MinNetUpdateFrequency", "NetPriority" }) do
+      pcall(function() local a, b = hp[p], pawn[p]; if tostring(a) ~= tostring(b) then diffs[#diffs+1] = p .. ":" .. tostring(b) .. "->" .. tostring(a); pawn[p] = a end end)
+    end
+    log("spawnFor: movement/net settings copied from host pawn (" .. #diffs .. " differed): " .. table.concat(diffs, " "))
+  end)
   local ok2, err = pcall(function() pc:Possess(pawn) end)
   log(string.format("spawnFor: spawned %s for %s possess_ok=%s %s", short(pawn), short(pc), tostring(ok2), ok2 and "" or tostring(err)))
   return ok2
@@ -146,14 +177,39 @@ local function spawnMissing()
   local hostPc = UEHelpers.GetPlayerController()
   local okh, hostPawn = pcall(function() return hostPc.Pawn end)
   if not (okh and valid(hostPawn)) then return end  -- host not in world yet
+  -- wait until the host's body has settled (not falling, not still at the origin) so joiners spawn on solid ground
+  local settled = false
+  pcall(function()
+    local l, v = hostPawn:K2_GetActorLocation(), hostPawn:GetVelocity()
+    settled = math.abs(v.Z) < 50 and not (math.abs(l.X) < 1 and math.abs(l.Y) < 1)
+  end)
+  if not settled then return end
   for _, pc in ipairs(liveInstances("BP_PlayerController_C")) do
     if pc:GetAddress() ~= hostPc:GetAddress() then
       local okp, pawn = pcall(function() return pc.Pawn end)
+      -- a dead body still counts as "no pawn": the game's own respawn flow is hard-wired to the host, so we
+      -- respawn joined players ourselves ~6s after death (unpossess the corpse, spawn a fresh body)
+      if okp and valid(pawn) then
+        local dead = false; pcall(function() dead = pawn["PlayerDead?"] == true end)
+        if dead then
+          local key = pc:GetFullName()
+          state.deadSince = state.deadSince or {}
+          state.deadSince[key] = state.deadSince[key] or os.time()
+          if os.time() - state.deadSince[key] >= 6 then
+            log("joined player is dead, respawning: " .. key)
+            pcall(function() pc:UnPossess() end)
+            state.deadSince[key] = nil
+            state.spawned[key] = nil
+            pawn = nil
+          end
+        end
+      end
       if not (okp and valid(pawn)) then
         local key = pc:GetFullName()
-        if not state.spawned[key] then
+        -- allow a retry every 10s (covers death without respawn, and the rpc path not producing a pawn)
+        if not state.spawned[key] or os.time() - state.spawned[key] >= 10 then
           log("joined player without pawn: " .. key)
-          if spawnFor(pc) then state.spawned[key] = true end
+          if spawnFor(pc) then state.spawned[key] = os.time() end
         end
       end
     end
@@ -194,7 +250,9 @@ RegisterConsoleCommandHandler("sdmp_levels", function() logLevels("manual"); ret
 -- ---------- client side: take control after joining ----------
 -- Only the menu itself is removed. The loading screen is the game's own transition widget; removing it
 -- mid-transition crashed a client. The game takes it down by itself.
-local MENU_WIDGETS = { MenuWidget_C = true, MainMenu_C = true }
+-- The death/respawn screens are removed too: their buttons call the game's respawn, which resets the HOST
+-- (hard-wired to player controller 0). The host respawns joined players itself.
+local MENU_WIDGETS = { MenuWidget_C = true, MainMenu_C = true, RespawnScreen_C = true, BP_RespawnHUD_C = true, ScreenPermadeath_C = true, QuitWidgetRespawn_C = true }
 local function clientTakeControl()
   local pc = UEHelpers.GetPlayerController()
   local ok, pawn = pcall(function() return pc.Pawn end)
@@ -558,6 +616,7 @@ end)
 for _, fn in ipairs({
   "/Script/Engine.PlayerController:ClientReturnToMainMenuWithTextReason",
   "/Script/Engine.PlayerController:ClientRestart",
+  "/Script/Engine.PlayerController:UnPossess",
 }) do
   pcall(function()
     RegisterHook(fn, function(ctx, ...)
@@ -580,7 +639,13 @@ after(12, function()
   for _, fn in ipairs({
     "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Event_LoadLevel",
     "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Survival_SpawnPlayer",
+    "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Survival_Respawn",
     "/Game/Blueprints/BP_PlayerController.BP_PlayerController_C:ReceivePossess",
+    "/Game/Blueprints/BP_PlayerController.BP_PlayerController_C:Svr_RequestRespawn_Random",
+    "/Game/Blueprints/BP_PlayerController.BP_PlayerController_C:Svr_RequestRespawnSuicide",
+    "/Game/Blueprints/BP_PlayerController.BP_PlayerController_C:Client_Died",
+    "/Game/Blueprints/BP_PlayerController.BP_PlayerController_C:Death_PlayerStats",
+    "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:MC_PlayerDead",
   }) do
     local ok2, err2 = pcall(function()
       RegisterHook(fn, function(ctx, ...)
@@ -592,7 +657,34 @@ after(12, function()
   end
 end, "late-hooks")
 
+-- ---------- network smoothing for other players' bodies (both sides) ----------
+-- A remote player's pawn is a simulated proxy here; without exponential smoothing it snaps to each net update.
+local smoothed = {}
+local function ensureSmoothing()
+  local myPawn; pcall(function() myPawn = UEHelpers.GetPlayerController().Pawn end)
+  for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
+    local key = p:GetAddress()
+    if not smoothed[key] and not (valid(myPawn) and myPawn:GetAddress() == key) then
+      smoothed[key] = true
+      pcall(function()
+        local cm = p.CharacterMovement
+        local before = string.format("smoothing=%s locTime=%.3f rotTime=%.3f lsLoc=%.3f netUpd=%.0f minUpd=%.0f repMove=%s role=%s", tostring(cm.NetworkSmoothingMode), cm.NetworkSimulatedSmoothLocationTime, cm.NetworkSimulatedSmoothRotationTime, cm.ListenServerNetworkSimulatedSmoothLocationTime, p.NetUpdateFrequency, p.MinNetUpdateFrequency, tostring(p.bReplicateMovement), tostring(p:GetLocalRole()))
+        -- ENetworkSmoothingMode: 0 Disabled, 1 Linear, 2 Exponential. The game already uses Exponential (2).
+        if tostring(cm.NetworkSmoothingMode) == "0" then cm.NetworkSmoothingMode = 2 end
+        if p.NetUpdateFrequency < 60 then p.NetUpdateFrequency = 100 end
+        if p.MinNetUpdateFrequency < 20 then p.MinNetUpdateFrequency = 30 end
+        -- the listen server smooths other players over only 0.04s by default; over a VPN that reads as stutter
+        if cm.ListenServerNetworkSimulatedSmoothLocationTime < 0.1 then cm.ListenServerNetworkSimulatedSmoothLocationTime = 0.12 end
+        if cm.ListenServerNetworkSimulatedSmoothRotationTime < 0.05 then cm.ListenServerNetworkSimulatedSmoothRotationTime = 0.08 end
+        if cm.NetworkSimulatedSmoothLocationTime < 0.12 then cm.NetworkSimulatedSmoothLocationTime = 0.12 end
+        log("smoothing: " .. p:GetFName():ToString() .. " " .. before .. " -> mode=" .. tostring(cm.NetworkSmoothingMode) .. " minUpd=" .. tostring(p.MinNetUpdateFrequency))
+      end)
+    end
+  end
+end
+
 -- ---------- periodic work ----------
+every(5, function() if netDriver() then pcall(ensureSmoothing) end end, "smoothing")
 every(2, function()
   local ok, err = pcall(injectMenuButtons)
   if not ok and not menuUI.loggedErr then menuUI.loggedErr = true; log("menu: inject error: " .. tostring(err)) end
@@ -626,13 +718,67 @@ do local role = os.getenv("SDMP_DEV")
         local ok, err = pcall(function() UEHelpers.GetGameInstance():Event_LoadLevel(FName(LEVEL_NAME)) end)
         log("dev host: Event_LoadLevel(" .. LEVEL_NAME .. ") ok=" .. tostring(ok) .. " " .. tostring(err))
       end, "dev-enter")
+      -- the dev entry path spawns the host at the origin (falling forever); move it to a known good spot once
+      local tp; tp = every(2, function()
+        local ok, hp = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
+        if ok and valid(hp) then
+          pcall(function() hp:K2_SetActorLocation({ X = 165450, Y = 49719, Z = 1600 }, false, {}, true) end)
+          log("dev host: teleported host pawn to the known spawn area"); cancel(tp)
+        end
+      end, "dev-teleport")
       every(15, function() status("dev-host") end, "dev-status")
+      -- dev: count the game's own server RPCs on player pawns and sample the joined pawn's position (jitter hunt)
+      local rpcCounts = {}
+      after(14, function()
+        for _, fn in ipairs({ "Svr_SetActorLocation", "Svr_SetActorRotation", "Svr_UpdateSpeed", "Svr_UpdateWalkSpeed", "Svr_UpdateSprintSpeed", "Svr_SetMovement", "Svr_Montage", "MC_UpdateSpeed", "Svr_UpdateCombatState", "Svr_Crouch", "Svr_UnCrouch" }) do
+          pcall(function()
+            RegisterHook("/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:" .. fn, function(ctx, ...)
+              local args = { ... }
+              local who = "?"; pcall(function() who = ctx:get():GetFName():ToString() end)
+              local k = fn .. "@" .. who; rpcCounts[k] = (rpcCounts[k] or 0) + 1
+              if fn == "Svr_SetActorLocation" and (rpcCounts[k] % 20 == 1) then pcall(function() local v = args[1]:get(); log(string.format("dev host: Svr_SetActorLocation %s -> %.0f %.0f %.0f", who, v.X, v.Y, v.Z)) end) end
+            end)
+          end)
+        end
+      end, "dev-rpc-hooks")
+      every(5, function()
+        local parts = {}
+        for k, v in pairs(rpcCounts) do parts[#parts+1] = k .. "=" .. v end
+        table.sort(parts)
+        if #parts > 0 then log("dev host: rpc counts " .. table.concat(parts, " ")) end
+        rpcCounts = {}
+        local hostPc = UEHelpers.GetPlayerController()
+        for _, pc in ipairs(liveInstances("BP_PlayerController_C")) do
+          if pc:GetAddress() ~= hostPc:GetAddress() then
+            pcall(function() local p = pc.Pawn; local l = p:K2_GetActorLocation(); local v = p:GetVelocity(); log(string.format("dev host: joined pawn at %.0f %.0f %.0f vel %.0f %.0f %.0f", l.X, l.Y, l.Z, v.X, v.Y, v.Z)) end)
+          end
+        end
+      end, "dev-rpc-report")
+      -- dev: 110s in, mark the first joined player's pawn dead on the server to exercise our respawn
+      if os.getenv("SDMP_DEVKILL") == "1" then
+        after(110, function()
+          local hostPc = UEHelpers.GetPlayerController()
+          for _, pc in ipairs(liveInstances("BP_PlayerController_C")) do
+            if pc:GetAddress() ~= hostPc:GetAddress() then
+              local ok, err = pcall(function() pc.Pawn["PlayerDead?"] = true end)
+              log("dev host: marked joined pawn dead ok=" .. tostring(ok) .. " " .. tostring(err))
+            end
+          end
+        end, "dev-kill")
+      end
     elseif role:sub(1, 5) == "join:" then
       after(45, function() cmdJoin(role:sub(6), true) end, "dev-join")
       every(15, function() status("dev-join") end, "dev-status")
     elseif role:sub(1, 7) == "joinip:" then
       after(45, function() setNetDriver(DRIVER_IP); cmdJoin(role:sub(8), true) end, "dev-join")
       every(15, function() status("dev-join") end, "dev-status")
+      every(5, function()
+        local ok, pawn = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
+        if ok and valid(pawn) then
+          local l, v = pawn:K2_GetActorLocation(), pawn:GetVelocity()
+          log(string.format("dev client: pawn=%s at %.0f %.0f %.0f vel %.0f %.0f %.0f", pawn:GetFName():ToString(), l.X, l.Y, l.Z, v.X, v.Y, v.Z))
+        else log("dev client: no pawn") end
+      end, "dev-pawnwatch")
     end
   end
 end
