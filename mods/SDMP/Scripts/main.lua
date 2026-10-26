@@ -9,7 +9,7 @@
 -- exactly ONE LoopAsync, which once per second runs a tiny scheduler on the game thread. Nothing else is async.
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.8"
+local VERSION = "0.1.9"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -112,6 +112,10 @@ local function status(tag)
     s = s .. " [" .. c:GetClass():GetFName():ToString() .. " lastRecv=" .. lrt .. " channels=" .. chans .. " driver=" .. drv .. "]"
   end
   s = s .. " controllers=" .. #liveInstances("BP_PlayerController_C") .. " playerpawns=" .. #liveInstances("BP_PlayerCharacter_C")
+  s = s .. " corrections=" .. tostring(state.adjusts or 0)
+  for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
+    pcall(function() s = s .. string.format(" [%s walk=%.0f role=%s]", p:GetFName():ToString():gsub("BP_PlayerCharacter_C_", "#"), p.CharacterMovement.MaxWalkSpeed, tostring(p:GetLocalRole())) end)
+  end
   log(s)
   return s
 end
@@ -159,6 +163,13 @@ local function spawnFor(pc)
     end
     log("spawnFor: movement/net settings copied from host pawn (" .. #diffs .. " differed): " .. table.concat(diffs, " "))
   end)
+  -- Joined players own their movement: the server accepts their position instead of correcting it.
+  -- This removes the rubber-banding a joiner sees on their own body (host still sees them smoothly).
+  pcall(function()
+    local cm = pawn.CharacterMovement
+    cm.bServerAcceptClientAuthoritativePosition = true
+    cm.bIgnoreClientMovementErrorChecksAndCorrection = true
+  end)
   local ok2, err = pcall(function() pc:Possess(pawn) end)
   log(string.format("spawnFor: spawned %s for %s possess_ok=%s %s", short(pawn), short(pc), tostring(ok2), ok2 and "" or tostring(err)))
   return ok2
@@ -191,6 +202,7 @@ local function spawnMissing()
       -- respawn joined players ourselves ~6s after death (unpossess the corpse, spawn a fresh body)
       if okp and valid(pawn) then
         local dead = false; pcall(function() dead = pawn["PlayerDead?"] == true end)
+        if not dead and state.deadPawns and state.deadPawns[pawn:GetAddress()] then dead = true end
         if dead then
           local key = pc:GetFullName()
           state.deadSince = state.deadSince or {}
@@ -605,6 +617,8 @@ pcall(function()
     local who = "?"; pcall(function() who = short(newPlayer:get()) end)
     log("PLAYER JOINED: " .. who)
     after(3, spawnMissing, "spawn-after-login")
+    after(8, rebroadcastAppearance, "appearance-after-login")
+    after(20, rebroadcastAppearance, "appearance-after-login-2")
   end)
 end)
 pcall(function()
@@ -636,6 +650,22 @@ after(12, function()
     end)
   end)
   log(ok and "menu: click hook installed" or ("menu: click hook failed: " .. tostring(err):sub(1, 100)))
+  -- death of a joined player's body: the multicast runs on the server too; remember the pawn so spawnMissing respawns it
+  pcall(function()
+    RegisterHook("/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:MC_PlayerDead", function(ctx)
+      local p; pcall(function() p = ctx:get() end)
+      if not valid(p) or isClient() then return end
+      local hp; pcall(function() hp = UEHelpers.GetPlayerController().Pawn end)
+      if valid(hp) and hp:GetAddress() == p:GetAddress() then log("host died") return end
+      state.deadPawns = state.deadPawns or {}
+      state.deadPawns[p:GetAddress()] = os.time()
+      log("joined player's body died: " .. short(p) .. " (respawn in ~6s)")
+    end)
+  end)
+  -- server->client movement corrections: count them (rubber-banding indicator, shown by F6)
+  pcall(function()
+    RegisterHook("/Script/Engine.Character:ClientAdjustPosition", function(ctx) state.adjusts = (state.adjusts or 0) + 1 end)
+  end)
   for _, fn in ipairs({
     "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Event_LoadLevel",
     "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Survival_SpawnPlayer",
@@ -677,14 +707,53 @@ local function ensureSmoothing()
         if cm.ListenServerNetworkSimulatedSmoothLocationTime < 0.1 then cm.ListenServerNetworkSimulatedSmoothLocationTime = 0.12 end
         if cm.ListenServerNetworkSimulatedSmoothRotationTime < 0.05 then cm.ListenServerNetworkSimulatedSmoothRotationTime = 0.08 end
         if cm.NetworkSimulatedSmoothLocationTime < 0.12 then cm.NetworkSimulatedSmoothLocationTime = 0.12 end
+        -- on the server, joined players' bodies are client-authoritative (no position corrections)
+        if not isClient() then cm.bServerAcceptClientAuthoritativePosition = true; cm.bIgnoreClientMovementErrorChecksAndCorrection = true end
         log("smoothing: " .. p:GetFName():ToString() .. " " .. before .. " -> mode=" .. tostring(cm.NetworkSmoothingMode) .. " minUpd=" .. tostring(p.MinNetUpdateFrequency))
       end)
     end
   end
 end
 
+-- ---------- late joiners: equipment and clothing ----------
+-- Weapons/items attached to a player are pickup actors that do not replicate (bReplicates=false), so joiners never
+-- see them. Turn replication on for anything attached to a player body; attachment then replicates too.
+local repFixed = {}
+local function replicateAttachedItems()
+  if isClient() then return end
+  local n = 0
+  for _, a in ipairs(liveInstances("Actor")) do
+    local key = a:GetAddress()
+    if not repFixed[key] then
+      local ok, parent = pcall(function() return a:GetAttachParentActor() end)
+      if ok and valid(parent) and parent:GetClass():GetFName():ToString() == "BP_PlayerCharacter_C" then
+        repFixed[key] = true
+        local isRep = false; pcall(function() isRep = a:GetIsReplicated() end)
+        if not isRep then
+          pcall(function() a:SetReplicates(true) end)
+          n = n + 1
+          log("replicate: " .. a:GetClass():GetFName():ToString() .. " attached to a player -> replicated")
+        end
+      end
+    end
+  end
+end
+
+-- Clothing is applied through multicasts at equip time; late joiners missed them. Ask the game to re-check
+-- the host's clothing shortly after someone joins (it re-broadcasts the body parts), once per join.
+local function rebroadcastAppearance()
+  if isClient() then return end
+  local hp; pcall(function() hp = UEHelpers.GetPlayerController().Pawn end)
+  if not valid(hp) then return end
+  local ok, err = pcall(function() hp:CheckClothing() end)
+  log("appearance: CheckClothing on host pawn ok=" .. tostring(ok) .. " " .. (ok and "" or tostring(err)))
+  repFixed = {}  -- re-scan attachments too
+  pcall(replicateAttachedItems)
+end
+
 -- ---------- periodic work ----------
 every(5, function() if netDriver() then pcall(ensureSmoothing) end end, "smoothing")
+every(10, function() if state.hosting then pcall(replicateAttachedItems) end end, "replicate-items")
 every(2, function()
   local ok, err = pcall(injectMenuButtons)
   if not ok and not menuUI.loggedErr then menuUI.loggedErr = true; log("menu: inject error: " .. tostring(err)) end
@@ -760,8 +829,8 @@ do local role = os.getenv("SDMP_DEV")
           local hostPc = UEHelpers.GetPlayerController()
           for _, pc in ipairs(liveInstances("BP_PlayerController_C")) do
             if pc:GetAddress() ~= hostPc:GetAddress() then
-              local ok, err = pcall(function() pc.Pawn["PlayerDead?"] = true end)
-              log("dev host: marked joined pawn dead ok=" .. tostring(ok) .. " " .. tostring(err))
+              local ok, err = pcall(function() pc.Pawn:MC_PlayerDead() end)
+              log("dev host: called MC_PlayerDead on joined pawn ok=" .. tostring(ok) .. " " .. tostring(err))
             end
           end
         end, "dev-kill")
