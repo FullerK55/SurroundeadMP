@@ -6,6 +6,22 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $gameDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Desktop shortcut (pinnable to taskbar/Start because its target is cmd.exe, not the .bat)
+try {
+    $lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "SurrounDead MP.lnk"
+    if (-not (Test-Path $lnk)) {
+        $ws = New-Object -ComObject WScript.Shell
+        $s = $ws.CreateShortcut($lnk)
+        $s.TargetPath = "$env:WINDIR\System32\cmd.exe"
+        $s.Arguments = "/c `"`"$gameDir\Launch SurrounDead MP.bat`"`""
+        $s.WorkingDirectory = $gameDir
+        $s.IconLocation = "$gameDir\SurrounDead-Win64-Shipping.exe,0"
+        $s.Description = "SurrounDead multiplayer (updates the mod, then launches the game)"
+        $s.Save()
+        Write-Host "[SDMP] Created desktop shortcut 'SurrounDead MP' (right-click it to pin to taskbar or Start)"
+    }
+} catch { Write-Host "[SDMP] Could not create desktop shortcut: $($_.Exception.Message)" }
 $dst = Join-Path $gameDir "ue4ss\Mods\SDMP"
 $tmp = Join-Path $env:TEMP "sdmp_update"
 try {
