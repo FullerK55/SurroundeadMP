@@ -25,7 +25,13 @@ while ($true) {
                 $stream = $client.GetStream()
                 $bytes = [System.Text.Encoding]::UTF8.GetBytes("LOG $name`n$tail")
                 $stream.Write($bytes, 0, $bytes.Length); $stream.Flush()
+                $client.Client.Shutdown([System.Net.Sockets.SocketShutdown]::Send)
+                # the receiver replies with the host's appearance file; keep it next to the game for the mod
+                $client.ReceiveTimeout = 5000
+                $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+                $reply = $reader.ReadToEnd()
                 $client.Close()
+                if ($reply.Length -gt 0) { [IO.File]::WriteAllText((Join-Path $gameDir "SDMP_host_appearance.txt"), $reply, [System.Text.Encoding]::UTF8) }
             } else { $client.Close() }
         }
     } catch { }

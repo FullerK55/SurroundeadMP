@@ -9,7 +9,7 @@
 -- exactly ONE LoopAsync, which once per second runs a tiny scheduler on the game thread. Nothing else is async.
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.2.0"
+local VERSION = "0.2.1"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -112,7 +112,7 @@ local function status(tag)
     s = s .. " [" .. c:GetClass():GetFName():ToString() .. " lastRecv=" .. lrt .. " channels=" .. chans .. " driver=" .. drv .. "]"
   end
   s = s .. " controllers=" .. #liveInstances("BP_PlayerController_C") .. " playerpawns=" .. #liveInstances("BP_PlayerCharacter_C")
-  s = s .. " corrections=" .. tostring(state.adjusts or 0)
+  s = s .. " corrections=" .. tostring(state.adjusts or 0) .. " moveResponses=" .. tostring(state.moveResponses or 0) .. " snaps=" .. tostring(state.snaps or 0) .. " maxSnap=" .. string.format("%.0f", state.maxSnap or 0)
   for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
     pcall(function() s = s .. string.format(" [%s walk=%.0f role=%s]", p:GetFName():ToString():gsub("BP_PlayerCharacter_C_", "#"), p.CharacterMovement.MaxWalkSpeed, tostring(p:GetLocalRole())) end)
   end
@@ -160,6 +160,8 @@ local function spawnFor(pc)
     end
     log("spawnFor: movement/net settings copied from host pawn (" .. #diffs .. " differed): " .. table.concat(diffs, " "))
   end)
+  -- never hand a joiner a slowed body (the death flow leaves walk speed at 120 on whatever it touched)
+  pcall(function() if state.hostWalkSpeed and pawn.CharacterMovement.MaxWalkSpeed < 300 then pawn.CharacterMovement.MaxWalkSpeed = state.hostWalkSpeed; log("spawnFor: walk speed set to " .. state.hostWalkSpeed) end end)
   -- (client-authoritative movement is enabled later by ensureSmoothing, once the joiner has the world loaded;
   -- doing it at spawn let a client that hadn't streamed the level yet fall through the floor and drag the server copy with it)
   local ok2, err = pcall(function() pc:Possess(pawn) end)
@@ -179,11 +181,16 @@ local function spawnMissing()
   updateHostStatusLabel()
   local hostPc = UEHelpers.GetPlayerController()
   local okh, hostPawn = pcall(function() return hostPc.Pawn end)
-  -- remember the last place the host stood on solid ground; joiners spawn there even if the host is dead right now
+  -- remember the host's body, the last place it stood on solid ground, and its normal walk speed
   if okh and valid(hostPawn) then
     pcall(function()
       local l, v = hostPawn:K2_GetActorLocation(), hostPawn:GetVelocity()
       local dead = false; pcall(function() dead = hostPawn["PlayerDead?"] == true end)
+      if not dead then
+        state.hostPawnAddr = hostPawn:GetAddress()
+        local ws = hostPawn.CharacterMovement.MaxWalkSpeed
+        if ws and ws >= 300 then state.hostWalkSpeed = ws end
+      end
       if math.abs(v.Z) < 50 and not (math.abs(l.X) < 1 and math.abs(l.Y) < 1) and not dead then state.lastGood = { X = l.X, Y = l.Y, Z = l.Z } end
     end)
   end
@@ -681,9 +688,38 @@ after(12, function()
       end
     end)
   end)
-  -- server->client movement corrections: count them (rubber-banding indicator, shown by F6)
+  -- server->client movement corrections: count them (rubber-banding indicator, shown by F6).
+  -- UE5 sends corrections through ClientMoveResponsePacked (acks too), ClientAdjustPosition is the legacy path.
   pcall(function()
     RegisterHook("/Script/Engine.Character:ClientAdjustPosition", function(ctx) state.adjusts = (state.adjusts or 0) + 1 end)
+  end)
+  pcall(function()
+    RegisterHook("/Script/Engine.Character:ClientMoveResponsePacked", function(ctx) state.moveResponses = (state.moveResponses or 0) + 1 end)
+  end)
+  -- snap detector (client side): the Blueprint tick runs every frame on the owned body; a position change that is
+  -- far larger than velocity * frame time, or backwards against the velocity, is a visible snap.
+  pcall(function()
+    local lastPos, lastT = nil, nil
+    RegisterHook("/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:ReceiveTick", function(ctx, dt)
+      if not isClient() then return end
+      local p; pcall(function() p = ctx:get() end)
+      if not valid(p) then return end
+      local okr, role = pcall(function() return p:GetLocalRole() end)
+      if not (okr and tonumber(role) == 2) then return end   -- only my own body (AutonomousProxy)
+      local l = p:K2_GetActorLocation(); local v = p:GetVelocity()
+      local d = 0; pcall(function() d = dt:get() end)
+      if lastPos then
+        local dx, dy = l.X - lastPos.X, l.Y - lastPos.Y
+        local moved = math.sqrt(dx * dx + dy * dy)
+        local expected = math.sqrt(v.X * v.X + v.Y * v.Y) * (d > 0 and d or 0.016)
+        local backwards = (dx * v.X + dy * v.Y) < 0 and moved > 5
+        if moved > expected * 2 + 30 or backwards then
+          state.snaps = (state.snaps or 0) + 1
+          if moved > (state.maxSnap or 0) then state.maxSnap = moved end
+        end
+      end
+      lastPos = { X = l.X, Y = l.Y }
+    end)
   end)
   for _, fn in ipairs({
     "/Game/Blueprints/SD_GameInstance.SD_GameInstance_C:Event_LoadLevel",
@@ -719,7 +755,7 @@ local function ensureSmoothing()
     firstSeen[key] = firstSeen[key] or os.time()
     -- server: joined players own their movement (no position corrections = no rubber-banding on their screen),
     -- but only once they have had ~20s to stream the world in, and only while they are standing on something
-    if not mine and not isClient() and os.time() - firstSeen[key] >= 20 and not smoothed[key .. "auth"] then
+    if not mine and not isClient() and os.time() - firstSeen[key] >= 8 and not smoothed[key .. "auth"] then
       pcall(function()
         local v = p:GetVelocity()
         local ctrl = p.Controller
@@ -760,6 +796,15 @@ restoreHostControl = function()
   local hp; pcall(function() hp = pc.Pawn end)
   local done = {}
   local function try(name, f) if pcall(f) then done[#done+1] = name end end
+  -- the single-player death flow unpossesses "player 0" (the host) when a JOINED body dies: re-attach the host's body
+  if not valid(hp) and state.hostPawnAddr then
+    for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
+      if p:GetAddress() == state.hostPawnAddr then
+        local okp = pcall(function() pc:Possess(p) end)
+        if okp then hp = p; done[#done+1] = "REPOSSESSED" end
+      end
+    end
+  end
   try("ignoreflags", function() pc:ResetIgnoreInputFlags() end)
   try("pc-input", function() pc:EnableInput(pc) end)
   if valid(hp) then
@@ -847,9 +892,95 @@ local function rebroadcastAppearance()
   pcall(replicateAttachedItems)
 end
 
+-- ---------- appearance by asset path (host -> joiners via the log helpers) ----------
+-- Clothing multicasts reference mesh assets a joiner may never have loaded, so they resolve to nothing there.
+-- The host writes which asset each body/clothing component uses to SDMP_appearance.txt; the log receiver hands
+-- that file to every sender; the joiner's mod loads those assets and applies them to the host's body replica.
+local APPEAR_SKEL = { "Clothing_Torso", "Clothing_Legs", "Clothing_Feet", "Clothing_Gloves", "Clothing_Armor", "head", "Arms", "Hands", "Legs", "Feet", "Torso", "LowerLegs", "LowerThighs", "Biceps" }
+local APPEAR_STATIC = { "HairMesh", "BeardMesh", "EyebrowsMesh", "Mouth", "Accessory1", "Accessory2", "Accessory3" }
+local function componentAsset(comp, static)
+  local a
+  if static then pcall(function() a = comp.StaticMesh end)
+  else
+    pcall(function() a = comp.SkeletalMeshAsset end)
+    if not valid(a) then pcall(function() a = comp.SkeletalMesh end) end
+  end
+  if valid(a) then return a:GetFullName():gsub("^%S+ ", "") end
+  return "none"
+end
+local function writeAppearance()
+  if isClient() then return end
+  local hp; pcall(function() hp = UEHelpers.GetPlayerController().Pawn end)
+  if not valid(hp) then return end
+  local lines = {}
+  local function add(name, static)
+    pcall(function()
+      local comp = hp[name]
+      if not valid(comp) then return end
+      local vis = true; pcall(function() vis = comp:IsVisible() end)
+      lines[#lines+1] = string.format("%s=%s|%s", name, componentAsset(comp, static), vis and "1" or "0")
+    end)
+  end
+  for _, n in ipairs(APPEAR_SKEL) do add(n, false) end
+  for _, n in ipairs(APPEAR_STATIC) do add(n, true) end
+  local text = table.concat(lines, "\n")
+  if text ~= state.lastAppearance then
+    state.lastAppearance = text
+    local f = io.open("SDMP_appearance.txt", "w"); if f then f:write(text, "\n"); f:close() end
+    log("appearance: wrote " .. #lines .. " component entries")
+  end
+end
+
+local applied = {}
+local function applyHostAppearance()
+  if not isClient() then return end
+  local f = io.open("SDMP_host_appearance.txt", "r"); if not f then return end
+  local text = f:read("*a"); f:close()
+  if text == "" then return end
+  -- the host's body on this client: a simulated proxy (role 1). With more joiners this picks the first one.
+  local hostPawn
+  for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
+    local okr, role = pcall(function() return p:GetLocalRole() end)
+    if okr and tonumber(role) == 1 then hostPawn = p; break end
+  end
+  if not valid(hostPawn) then return end
+  local n = 0
+  for line in text:gmatch("[^\r\n]+") do
+    local name, path, vis = line:match("^([%w_]+)=(.-)|([01])$")
+    if name and applied[name] ~= line then
+      local ok, err = pcall(function()
+        local comp = hostPawn[name]
+        if not valid(comp) then error("no component") end
+        local static = false
+        for _, s in ipairs(APPEAR_STATIC) do if s == name then static = true end end
+        if path ~= "none" then
+          local asset = LoadAsset(path)
+          if not valid(asset) then error("asset not loaded: " .. path) end
+          if static then comp:SetStaticMesh(asset)
+          else
+            local okm = pcall(function() comp:SetSkeletalMeshAsset(asset) end)
+            if not okm then comp:SetSkeletalMesh(asset, true) end
+          end
+        end
+        comp:SetVisibility(vis == "1", false)
+      end)
+      if ok then applied[name] = line; n = n + 1 else log("appearance: apply " .. name .. " failed: " .. tostring(err):sub(1, 120)) end
+    end
+  end
+  if n > 0 then log("appearance: applied " .. n .. " component(s) to the host's body") end
+end
+
 -- ---------- periodic work ----------
 every(5, function() if netDriver() then pcall(ensureSmoothing) end end, "smoothing")
+every(10, function() if state.hosting then pcall(writeAppearance) end; if state.joining and isClient() then pcall(applyHostAppearance) end end, "appearance")
 every(10, function() if state.hosting then pcall(replicateAttachedItems) end end, "replicate-items")
+-- client: report snaps every 10s while in the world (goes to the log the host receives)
+every(10, function()
+  if state.joining and isClient() and (state.snaps or 0) + (state.moveResponses or 0) > 0 then
+    log(string.format("jitter: snaps=%d maxSnap=%.0fcm moveResponses=%d corrections=%d (last 10s)", state.snaps or 0, state.maxSnap or 0, state.moveResponses or 0, state.adjusts or 0))
+    state.snaps, state.maxSnap, state.moveResponses, state.adjusts = 0, 0, 0, 0
+  end
+end, "jitter-report")
 every(2, function()
   local ok, err = pcall(injectMenuButtons)
   if not ok and not menuUI.loggedErr then menuUI.loggedErr = true; log("menu: inject error: " .. tostring(err)) end

@@ -15,12 +15,17 @@ while ($true) {
             $stream = $client.GetStream()
             $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
             $header = $reader.ReadLine()          # "LOG <name>"
-            $body = $reader.ReadToEnd()
-            $client.Close()
+            $body = $reader.ReadToEnd()           # sender shuts down its send side when done
             $name = "unknown"
             if ($header -match '^LOG\s+(.+)$') { $name = ($Matches[1] -replace '[^A-Za-z0-9_\-]', '_') }
             $file = Join-Path $outDir ("{0}_{1}.log" -f $name, ($ip -replace '[^0-9.]', '_'))
             [IO.File]::WriteAllText($file, $body, [System.Text.Encoding]::UTF8)
+            # reply with the host's appearance file (asset paths) so the joiner can load the same meshes
+            $app = Join-Path $gameDir "SDMP_appearance.txt"
+            $reply = ""; if (Test-Path $app) { $reply = [IO.File]::ReadAllText($app) }
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($reply)
+            try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush() } catch { }
+            $client.Close()
         } catch { }
     } else {
         Start-Sleep -Milliseconds 500
