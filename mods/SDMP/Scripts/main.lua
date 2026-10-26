@@ -9,7 +9,7 @@
 -- Log: <Win64>/SDMP.log
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.4"
+local VERSION = "0.1.5"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -21,6 +21,8 @@ local function log(s)
 end
 
 local state = { hosting = false, joining = false, target = nil, spawned = {} }
+local menuUI = { host = nil, join = nil, menu = nil }   -- main-menu button instances (see menu section)
+local setButtonText                                     -- defined in the menu section
 
 -- UE4SS timers (ExecuteWithDelay / LoopAsync) run on their own thread. Anything that touches
 -- game objects (spawn, possess, level streaming, even reading actors) must hop to the game thread.
@@ -123,8 +125,16 @@ local function spawnFor(pc)
   return ok2
 end
 
+local function updateHostStatusLabel()
+  if valid(menuUI.status) then
+    local n = 0; pcall(function() n = #UEHelpers.GetGameStateBase().PlayerArray end)
+    setButtonText(menuUI.status, "MP: HOSTING OK - players: " .. n .. " - click New or Load")
+  end
+end
+
 local function spawnMissing()
   if isClient() then return end
+  updateHostStatusLabel()
   local hostPc = UEHelpers.GetPlayerController()
   local okh, hostPawn = pcall(function() return hostPc.Pawn end)
   if not (okh and valid(hostPawn)) then return end  -- host not in world yet; wait
@@ -269,9 +279,7 @@ local cmdHost, cmdJoin
 -- Two instances of the game's own ButtonWidget_C are added under the Quit button of MenuWidget_C.
 -- Clicks are detected by hooking ButtonWidget_C's click event and comparing the instance.
 local BTN_CLASS = "/Game/UI/Menus/ButtonWidget.ButtonWidget_C"
-local menuUI = { host = nil, join = nil, menu = nil }
-
-local function setButtonText(w, label)
+setButtonText = function(w, label)
   pcall(function() w.Text = FText(label) end)
   pcall(function() w.ButtonText:SetText(FText(label)) end)
 end
@@ -409,12 +417,58 @@ cmdHost = function()
   return true
 end
 
+-- did the host answer yet? (pending connection with at least one packet received, or already a client)
+local function hostReplied()
+  if isClient() then return true end
+  for _, pg in ipairs(liveInstances("PendingNetGame")) do
+    local ok, t = pcall(function() return pg.NetDriver.ServerConnection.LastReceiveTime end)
+    if ok and tonumber(t) and tonumber(t) > 0 then return true end
+  end
+  for _, c in ipairs(liveInstances("NetConnection")) do
+    local ok, t = pcall(function() return c.LastReceiveTime end)
+    if ok and tonumber(t) and tonumber(t) > 0 then return true end
+  end
+  return false
+end
+
+local function joinProgress(url)
+  local started = os.time()
+  local found = false
+  LoopAsync(1000, function()
+    local done = false
+    ExecuteInGameThread(function()
+      local elapsed = os.time() - started
+      if isClient() then
+        local ok, pawn = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
+        if ok and valid(pawn) then log("JOIN: connected and in the world"); done = true; return end
+        if not found then found = true; log("JOIN: host found, loading world...") end
+        if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
+        return
+      end
+      if hostReplied() then
+        if not found then found = true; log("JOIN: host found (" .. url .. "), loading...") end
+        if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
+        if elapsed > 90 then log("JOIN: stuck after host reply for 90s, giving up"); state.joining = false; done = true end
+        return
+      end
+      if elapsed >= 15 then
+        log("JOIN: HOST NOT FOUND after 15s (" .. url .. "). Is the host past HOSTING OK? Is Radmin green?")
+        if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST NOT FOUND - click to retry") end
+        state.joining = false; done = true; return
+      end
+      if valid(menuUI.join) then setButtonText(menuUI.join, "MP: CONNECTING... " .. elapsed .. "s") end
+    end)
+    return done
+  end)
+end
+
 cmdJoin = function(target, viaIp)
   if not target or target == "" then log("usage: sdmp_join <SteamID64>   or   sdmp_join_ip <ip[:port]>"); return true end
   local url = viaIp and target or ("steam." .. target)
   log("sdmp_join: open " .. url)
   state.joining = true; state.target = url
   consoleCmd("open " .. url)
+  joinProgress(url)
   for _, d in ipairs({ 5000, 10000, 20000, 40000 }) do ExecuteWithDelay(d, gt(function() status("join+" .. (d / 1000) .. "s") end)) end
   ExecuteWithDelay(12000, gt(function() logLevels("join+12s") end))
   ExecuteWithDelay(45000, gt(function() logLevels("join+45s") end))
@@ -450,7 +504,7 @@ RegisterKeyBind(Key.F7, {ModifierKey.SHIFT}, function() log("Shift+F7: host with
 pcall(function()
   RegisterHook("/Script/Engine.GameModeBase:K2_PostLogin", function(ctx, newPlayer)
     local who = "?"; pcall(function() who = short(newPlayer:get()) end)
-    log("PostLogin: " .. who)
+    log("PLAYER JOINED: " .. who)
     ExecuteWithDelay(3000, gt(spawnMissing))
     ExecuteWithDelay(10000, gt(spawnMissing))
   end)
@@ -458,7 +512,7 @@ end)
 pcall(function()
   RegisterHook("/Script/Engine.GameModeBase:K2_OnLogout", function(ctx, exiting)
     local who = "?"; pcall(function() who = short(exiting:get()) end)
-    log("Logout: " .. who); state.spawned[who] = nil
+    log("PLAYER LEFT: " .. who); state.spawned[who] = nil
   end)
 end)
 
