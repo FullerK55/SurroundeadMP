@@ -133,6 +133,31 @@ OSS, not SteamShared/SteamSockets. Direct exe launch: SteamAPI has no appid, Ste
 Decision: ship `Launch SurrounDead MP.bat` (direct launch with -nosteam) in the package; F7 now always forces the IP driver,
 Ctrl+F7 / `sdmp_host_steam` keeps the Steam Sockets path for later.
 
+## Distribution (2026-10-25)
+
+Public repo: https://github.com/FullerK55/SurroundeadMP (branch master). `package/Win64/Launch SurrounDead MP.bat`
+downloads the master zip from GitHub on every launch, copies `mods/SDMP/*` into `ue4ss\Mods\SDMP`, then starts the exe
+with `-nosteam`. So: edit `mods/SDMP`, commit, push, and every friend gets it next launch. Rebuild
+`package/SDMP-test-build.zip` only when UE4SS itself or the bat changes. `package/Win64/` is gitignored except the bat.
+
+## First successful two-PC join and the fixes after it (2026-10-25 19:42-20:05)
+
+- 19:42 over Radmin via the launcher: friend's controller logged in, host spawned a pawn, host crashed (access violation,
+  UE4SS at the bottom of the stack). Cause: `LoopAsync`/`ExecuteWithDelay` callbacks run off the game thread; SpawnActor +
+  Possess from there. Fix 0.1.1: every game-object call goes through `ExecuteInGameThread` (helper `gt()`).
+- Second attempt: friend was in the world with the main menu still showing, clicked New Game, got a phantom body he
+  couldn't control. Fix 0.1.2/0.1.3: on the client, remove `MenuWidget_C`/`LoadingScreenWidget_C` from the viewport and
+  call `WidgetBlueprintLibrary:SetInputMode_GameOnly(pc, false)` once a pawn exists.
+- GAME-FLOW trace (hooks must be registered ~12s after boot, BP classes aren't loaded earlier): on the client,
+  `Event_LoadLevel` and then `Survival_SpawnPlayer` run by themselves when `LongdownValley` streams in, spawning a local
+  non-networked `BP_PlayerCharacter_C`. Fix 0.1.4: on the client, destroy any `BP_PlayerCharacter_C` whose `GetLocalRole()`
+  is Authority (3) (locally spawned); real pawns are AutonomousProxy/SimulatedProxy.
+- Main-menu buttons (0.1.3): two instances of the game's `ButtonWidget_C` created with `WidgetBlueprintLibrary:Create`,
+  added via `Quit:GetParent():AddChildToVerticalBox`. Clicks detected by hooking
+  `ButtonWidget_C:BndEvt__ButtonWidget_Button_K2Node_ComponentBoundEvent_0_OnButtonClickedEvent__DelegateSignature`
+  and comparing the instance address. The menu widget only exists after the "press any key" screen; the injector polls.
+  After hosting the menu is rebuilt; a status button "HOSTING OK - now click New or Load" is injected instead.
+
 ## Plan
 
 1. Host test, one machine: in the UE4SS console run `open PersistentLevel?listen` from the main menu and check the log for a

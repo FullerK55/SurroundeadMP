@@ -9,7 +9,7 @@
 -- Log: <Win64>/SDMP.log
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.3"
+local VERSION = "0.1.4"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -186,6 +186,16 @@ local function clientTakeControl()
   local pc = UEHelpers.GetPlayerController()
   local ok, pawn = pcall(function() return pc.Pawn end)
   if not (ok and valid(pawn)) then return end
+  -- the game's single-player start flow also runs on a client when the world level streams in, spawning a
+  -- local, non-networked player. Locally spawned actors on a client have local role Authority (3);
+  -- real networked pawns are AutonomousProxy (2) or SimulatedProxy (1). Destroy the phantoms.
+  for _, p in ipairs(liveInstances("BP_PlayerCharacter_C")) do
+    local okr, role = pcall(function() return p:GetLocalRole() end)
+    if okr and tonumber(role) == 3 then
+      log("client: destroying locally spawned phantom pawn " .. short(p))
+      pcall(function() p:K2_DestroyActor() end)
+    end
+  end
   local removed = 0
   local widgets = FindAllOf("UserWidget")
   if widgets then for _, wdg in ipairs(widgets) do
