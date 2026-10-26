@@ -9,7 +9,7 @@
 -- exactly ONE LoopAsync, which once per second runs a tiny scheduler on the game thread. Nothing else is async.
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.6"
+local VERSION = "0.1.7"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -293,6 +293,53 @@ local function findMenuWidget()
   return nil
 end
 
+-- copy the look of the game's own menu entry (button style, text font/colour/alignment, slot padding) onto ours
+local function describeTree(w, depth, out)
+  depth = depth or 0; out = out or {}
+  if not valid(w) or depth > 4 then return out end
+  local line = string.rep("  ", depth) .. w:GetClass():GetFName():ToString() .. " " .. w:GetFName():ToString()
+  pcall(function() local s = w.Slot; if valid(s) then line = line .. " [slot " .. s:GetClass():GetFName():ToString() .. "]" end end)
+  out[#out+1] = line
+  pcall(function()
+    local n = w:GetChildrenCount()
+    for i = 0, n - 1 do describeTree(w:GetChildAt(i), depth + 1, out) end
+  end)
+  return out
+end
+
+local function styleLikeMenu(w, menu, refButton, refText)
+  local steps = {}
+  local function try(name, f) local ok, err = pcall(f); steps[#steps+1] = name .. (ok and "" or ("!" .. tostring(err):sub(1, 50))) end
+  -- button visuals: try a direct struct copy first, then the setter, then resync
+  try("stylecopy", function() w.Button.WidgetStyle = refButton.WidgetStyle end)
+  try("style", function() w.Button:SetStyle(refButton.WidgetStyle) end)
+  -- text visuals
+  try("font", function() w.ButtonText:SetFont(refText.Font) end)
+  try("color", function() w.ButtonText:SetColorAndOpacity(refText.ColorAndOpacity) end)
+  try("just", function() w.ButtonText:SetJustification(refText.Justification) end)
+  try("shadow", function() w.ButtonText:SetShadowOffset(refText.ShadowOffset); w.ButtonText:SetShadowColorAndOpacity(refText.ShadowColorAndOpacity) end)
+  -- text placement inside the button: copy the reference text's slot alignment + padding
+  try("textslot", function()
+    local rs, ms = refText.Slot, w.ButtonText.Slot
+    ms:SetPadding(rs.Padding)
+    ms:SetHorizontalAlignment(rs.HorizontalAlignment)
+    ms:SetVerticalAlignment(rs.VerticalAlignment)
+  end)
+  -- our widget's slot in the vertical box: copy the reference button's slot padding / size / alignment
+  try("boxslot", function()
+    local rs, ms = refButton.Slot, w.Slot
+    ms:SetPadding(rs.Padding)
+    ms:SetHorizontalAlignment(rs.HorizontalAlignment)
+    ms:SetVerticalAlignment(rs.VerticalAlignment)
+    ms:SetSize(rs.Size)
+  end)
+  -- ButtonWidget_C may size its text from its own variable; mirror the reference font size
+  try("textsize", function() w.TextSize = refText.Font.Size end)
+  local failed = {}
+  for _, s in ipairs(steps) do if s:find("!", 1, true) then failed[#failed+1] = s end end
+  if #failed > 0 then log("menu: style steps failed: " .. table.concat(failed, " ")) end
+end
+
 local function makeMenuButton(menu, label, refButton, index)
   local cls = StaticFindObject(BTN_CLASS)
   if not valid(cls) then error("ButtonWidget_C class not loaded") end
@@ -315,6 +362,7 @@ local function makeMenuButton(menu, label, refButton, index)
   end
   setButtonText(w, label)
   log("menu: added '" .. label .. "' (parent " .. pname .. ")")
+  pcall(function() styleLikeMenu(w, menu, refButton, menu.QuitText) end)
   return w
 end
 
@@ -334,6 +382,43 @@ local function injectMenuButtons()
   menuUI.host = makeMenuButton(menu, "MP: HOST", ref, 1)
   menuUI.join = makeMenuButton(menu, "MP: JOIN " .. (readConfig().host_ip or "?"), ref, 2)
   menuUI.menu = menu
+  -- The game's list has separator widgets between entries (the thin bars). Clone the one before Quit and
+  -- put copies before each of our entries so the rhythm matches.
+  pcall(function()
+    local box = ref:GetParent()
+    local n = box:GetChildrenCount()
+    local qi = -1
+    for i = 0, n - 1 do
+      if box:GetChildAt(i):GetAddress() == ref:GetAddress() then qi = i end
+    end
+    if qi < 1 then return end
+    local sep = box:GetChildAt(qi - 1)
+    local sepClass = sep:GetClass()
+    local sepName = sepClass:GetFName():ToString()
+    if sepName == "Button" then return end  -- no separator widgets; entries are adjacent buttons
+    local function cloneSep()
+      local w = StaticConstructObject(sepClass, menu.WidgetTree)
+      if not valid(w) then w = StaticConstructObject(sepClass, box) end
+      if not valid(w) then error("StaticConstructObject(" .. sepName .. ") failed") end
+      pcall(function() w:SetBrush(sep.Brush) end)            -- Image / Border
+      pcall(function() w:SetSize(sep.Size) end)              -- Spacer
+      pcall(function() w:SetVisibility(sep.Visibility) end)
+      return w
+    end
+    local okc, errc = pcall(function()
+      local s1, s2 = cloneSep(), cloneSep()
+      -- order after Quit: sep, HOST, sep, JOIN  (InsertChildAt isn't exposed; our two are last, so re-add in order)
+      box:RemoveChild(menuUI.host); box:RemoveChild(menuUI.join)
+      box:AddChildToVerticalBox(s1); box:AddChildToVerticalBox(menuUI.host); box:AddChildToVerticalBox(s2); box:AddChildToVerticalBox(menuUI.join)
+      pcall(function() styleLikeMenu(menuUI.host, menu, ref, menu.QuitText); styleLikeMenu(menuUI.join, menu, ref, menu.QuitText) end)
+      for _, pair in ipairs({ { s1, sep }, { s2, sep } }) do
+        pcall(function() local ms, rs = pair[1].Slot, pair[2].Slot; ms:SetPadding(rs.Padding); ms:SetSize(rs.Size); ms:SetHorizontalAlignment(rs.HorizontalAlignment); ms:SetVerticalAlignment(rs.VerticalAlignment) end)
+      end
+      local sz = "?"; pcall(function() sz = string.format("%.0fx%.0f", sep.Size.X, sep.Size.Y) end)
+      log("menu: inserted two " .. sepName .. " separators (size " .. sz .. ") cloned from child " .. (qi - 1))
+    end)
+    if not okc then log("menu: separator insert failed: " .. tostring(errc)) end
+  end)
 end
 
 local function onMenuButtonClicked(w)
