@@ -9,7 +9,7 @@
 -- exactly ONE LoopAsync, which once per second runs a tiny scheduler on the game thread. Nothing else is async.
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.1.9"
+local VERSION = "0.2.0"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -22,7 +22,7 @@ end
 
 local state = { hosting = false, joining = false, target = nil, spawned = {} }
 local menuUI = { host = nil, join = nil, menu = nil }
-local setButtonText, cmdHost, cmdJoin   -- defined later
+local setButtonText, cmdHost, cmdJoin, restoreHostControl   -- defined later
 
 -- ---------- scheduler (all game-thread work goes through here) ----------
 local tasks = {}   -- { at = time, every = seconds|nil, fn = function, name = string, cancelled = bool }
@@ -593,6 +593,17 @@ RegisterConsoleCommandHandler("sdmp_spawn", function() state.spawned = {}; spawn
 RegisterKeyBind(Key.F7, {}, function() log("F7: host with IP driver"); state.useIpDriver = true; setNetDriver(DRIVER_IP); cmdHost() end)
 RegisterKeyBind(Key.F7, {ModifierKey.CONTROL}, function() log("Ctrl+F7: host with Steam Sockets driver"); state.useIpDriver = false; setNetDriver(DRIVER_STEAM); cmdHost() end)
 RegisterKeyBind(Key.F6, {}, function() status("F6") end)
+-- F5: copy this PC's SDMP.log to the Desktop so a joiner can hand it to the host
+RegisterKeyBind(Key.F5, {}, function()
+  status("F5")
+  local ok, err = pcall(function()
+    local src = io.open("SDMP.log", "rb"); local data = src:read("*a"); src:close()
+    local desktop = (os.getenv("USERPROFILE") or ".") .. "\\Desktop\\SDMP-log.txt"
+    local dst = io.open(desktop, "wb"); dst:write(data); dst:close()
+    log("F5: log copied to " .. desktop .. " - send that file to the host")
+  end)
+  if not ok then log("F5: copy failed: " .. tostring(err)) end
+end)
 RegisterKeyBind(Key.F8, {}, function()
   local cfg = readConfig()
   if cfg.host_steamid then log("F8: joining host_steamid from sdmp.ini"); cmdJoin(cfg.host_steamid, false)
@@ -653,6 +664,21 @@ after(12, function()
       state.deadPawns = state.deadPawns or {}
       state.deadPawns[p:GetAddress()] = os.time()
       log("joined player's body died: " .. short(p) .. " (respawn in ~6s)")
+      -- the game's death logic is written for one player and acts on "player 0" = the host: it kills the host's
+      -- input (no death screen, just frozen). Give the host its controls back shortly after.
+      for _, d in ipairs({ 1, 4, 8 }) do after(d, restoreHostControl, "restore-host-control") end
+    end)
+  end)
+  -- clothing: record the host's attach calls (server) / count received ones (client)
+  pcall(function()
+    RegisterHook("/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:MC_AttachClothing", function(ctx, clothing, mesh, parts, male, bodyPart, updateAll)
+      if isClient() then
+        local bp = "?"; pcall(function() bp = bodyPart:get():ToString() end)
+        state.clothingReceived = (state.clothingReceived or 0) + 1
+        log("appearance: received clothing for " .. bp)
+      else
+        recordClothingCall(ctx, clothing, mesh, parts, male, bodyPart, updateAll)
+      end
     end)
   end)
   -- server->client movement corrections: count them (rubber-banding indicator, shown by F6)
@@ -726,6 +752,28 @@ local function ensureSmoothing()
   end
 end
 
+-- ---------- host control recovery ----------
+-- Undo everything the single-player death flow may have done to the host's controller when SOMEONE ELSE died.
+restoreHostControl = function()
+  if isClient() then return end
+  local pc = UEHelpers.GetPlayerController()
+  local hp; pcall(function() hp = pc.Pawn end)
+  local done = {}
+  local function try(name, f) if pcall(f) then done[#done+1] = name end end
+  try("ignoreflags", function() pc:ResetIgnoreInputFlags() end)
+  try("pc-input", function() pc:EnableInput(pc) end)
+  if valid(hp) then
+    try("pawn-input", function() hp:EnableInput(hp) end)
+    try("pawn-input-pc", function() hp:EnableInput(pc) end)
+    try("viewtarget", function() pc:SetViewTargetWithBlend(hp, 0.0, 0, 0.0, false) end)
+  end
+  try("inputmode", function() StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary"):SetInputMode_GameOnly(pc, false); pc.bShowMouseCursor = false end)
+  try("timedilation", function() UEHelpers.GetGameplayStatics():SetGlobalTimeDilation(UEHelpers.GetWorld(), 1.0) end)
+  try("unpause", function() UEHelpers.GetGameplayStatics():SetGamePaused(UEHelpers.GetWorld(), false) end)
+  log("host control restored: " .. table.concat(done, " "))
+end
+RegisterKeyBind(Key.F4, {}, function() log("F4: restore host control"); pcall(restoreHostControl) end)
+
 -- ---------- late joiners: equipment and clothing ----------
 -- Weapons/items attached to a player are pickup actors that do not replicate (bReplicates=false), so joiners never
 -- see them. Turn replication on for anything attached to a player body; attachment then replicates too.
@@ -750,14 +798,51 @@ local function replicateAttachedItems()
   end
 end
 
--- Clothing is applied through multicasts at equip time; late joiners missed them. Ask the game to re-check
--- the host's clothing shortly after someone joins (it re-broadcasts the body parts), once per join.
+-- Clothing is applied through the MC_AttachClothing multicast at equip time; late joiners missed those calls.
+-- We record every call the host's body makes (arguments included) and replay them when someone joins.
+local PARTS_FIELDS = {
+  "MaleTorsoMesh_37_C39419A54F846168C8ACC7B8047249B8", "MaleArmsMesh_38_E3992D3D4D3FC15857DCCA96943DF404",
+  "MaleBicepsMesh_58_A5C488CE417D90B275C89D85A579F848", "MaleHandsMesh_39_62A6D44C46074AB07761FD8486836B1E",
+  "MaleLegsMesh_40_D743A1EA4C0458D9DB7686B580B34B55", "MaleLowerThighsMesh_60_1BB76DBD438060796E0670BACC379CFB",
+  "MaleLowerLegsMesh_41_C71508734756C346F2E4E5B00E2D7D7A", "MaleFeetMesh_42_052101B64D2CB0C9572A4AAD3997D93B",
+  "FemaleTorsoMesh_49_66B3BA484F8278F2133583B2677358EA", "FemaleArmsMesh_50_5D08A0FA4B92C459DDDD8E8043029F2F",
+  "FemaleBicepsMesh_63_742947C24722CA2991518EA18DF1C2EC", "FemaleHandsMesh_51_994CCC674C6D50AFD49448941EA98F9F",
+  "FemaleLegsMesh_52_7AE6631D44A06557F6DCB28A267ABCF0", "FemaleLowerThighsMesh_64_6FC37310431BCF7E935A9A80E8A8CEFD",
+  "FemaleLowerLegsMesh_53_0981B7444A0C7933ABE436BAE54E9BC8", "FemaleFeetMesh_54_759E5B484609B6B259ECB5ACB9BFA58A",
+}
+local clothingCalls = {}   -- bodyPart -> { clothing, mesh, parts(table), male, bodyPart, updateAll }
+local function recordClothingCall(ctx, clothing, mesh, parts, male, bodyPart, updateAll)
+  if isClient() then return end
+  local hp; pcall(function() hp = UEHelpers.GetPlayerController().Pawn end)
+  local self; pcall(function() self = ctx:get() end)
+  if not (valid(hp) and valid(self) and self:GetAddress() == hp:GetAddress()) then return end
+  local call = {}
+  pcall(function() call.clothing = clothing:get() end)
+  pcall(function() call.mesh = mesh:get() end)
+  pcall(function() call.male = male:get() end)
+  pcall(function() call.bodyPart = bodyPart:get():ToString() end)
+  pcall(function() call.updateAll = updateAll:get() end)
+  call.parts = {}
+  pcall(function()
+    local s = parts:get()
+    for _, f in ipairs(PARTS_FIELDS) do pcall(function() local v = s[f]; if valid(v) then call.parts[f] = v end end) end
+  end)
+  if call.bodyPart then
+    clothingCalls[call.bodyPart] = call
+    log("appearance: recorded clothing call for " .. call.bodyPart .. " (mesh " .. (valid(call.mesh) and call.mesh:GetFName():ToString() or "none") .. ")")
+  end
+end
+
 local function rebroadcastAppearance()
   if isClient() then return end
   local hp; pcall(function() hp = UEHelpers.GetPlayerController().Pawn end)
   if not valid(hp) then return end
-  local ok, err = pcall(function() hp:CheckClothing() end)
-  log("appearance: CheckClothing on host pawn ok=" .. tostring(ok) .. " " .. (ok and "" or tostring(err)))
+  local n = 0
+  for part, c in pairs(clothingCalls) do
+    local ok, err = pcall(function() hp:MC_AttachClothing(c.clothing, c.mesh, c.parts, c.male, FName(c.bodyPart), c.updateAll) end)
+    if ok then n = n + 1 else log("appearance: re-send failed for " .. part .. ": " .. tostring(err)) end
+  end
+  log("appearance: re-sent " .. n .. " clothing call(s) to clients")
   repFixed = {}  -- re-scan attachments too
   pcall(replicateAttachedItems)
 end
