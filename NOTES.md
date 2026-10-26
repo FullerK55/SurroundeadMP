@@ -195,6 +195,41 @@ ExecuteWithDelay, never nest ExecuteInGameThread inside another UE4SS async call
   0 Disabled / 1 Linear / 2 Exponential and the game uses 2. Raised ListenServerNetworkSimulatedSmoothLocationTime
   0.04 -> 0.12 and MinNetUpdateFrequency 2 -> 30 on remote pawns; real-latency effect still to be confirmed with the friend.
 
+## Real-session findings 22:20-22:35 and 0.2.0/0.2.1
+
+- First two-PC session with log delivery: joiner's log arrives in `Win64\joiner_logs\<NAME>_<ip>.log` every 30s
+  (TCP 7778 over Radmin; receiver `sdmp_logserver.ps1`, sender `sdmp_sendlog.ps1`, firewall rule via `sdmp_firewall.ps1`
+  on the host only, launched by the .bat; the receiver replies with `SDMP_appearance.txt`).
+- When a JOINED body dies, the game's death flow (single-player, acts on player 0) UNPOSSESSES the host: host F6 showed
+  `pawn=nil` with both bodies alive. 0.2.1: `restoreHostControl` re-possesses the remembered host pawn
+  (`state.hostPawnAddr`), plus input flags / input mode / view target / time dilation / pause. F4 does it manually.
+- Clothing: the client logged `received clothing for Torso/Legs/Feet` but the host looked naked: the multicast
+  references mesh assets the joiner never loaded, so they resolve to null. 0.2.1: host writes component -> asset path
+  (+visibility) for 21 body/clothing components to `SDMP_appearance.txt`; delivered through the log channel as
+  `SDMP_host_appearance.txt`; client `LoadAsset()`s them and applies `SetSkeletalMeshAsset`/`SetStaticMesh`/visibility
+  to the host's simulated-proxy body. Works in loopback (20 components applied). Not verified visually yet.
+- Jitter: `corrections=0` was meaningless: UE5 corrects through `ClientMoveResponsePacked`. Now counted, plus a
+  ReceiveTick-based snap detector on the joiner's own body (`jitter: snaps=... maxSnap=...` every 10s in the joiner log).
+  Client authority now 8s after spawn (was 20s). Still unexplained; next session's joiner log has the numbers.
+- Host clicking JOIN on its own address then HOST crashed the game ("Couldn't spawn player"). TODO: refuse self-join.
+
+## Session 22:35-22:47 (0.2.1 -> 0.2.2)
+
+- Host re-possession after a joiner's death: WORKS (`host control restored: REPOSSESSED ...`).
+- Appearance by path: pants and boots show on the joiner, shirt doesn't, although all 20 components "applied".
+  Likely the game's own clothing logic nulls the torso again later; 0.2.2 re-applies whenever the component's
+  current asset differs from the wanted one.
+- Jitter numbers from the joiner (0.2.1, before the correction cap): `snaps=101 maxSnap=67cm moveResponses=90` per 10s,
+  i.e. ~10 backwards snaps/s of 30-70cm, no legacy ClientAdjustPosition. In loopback at 0 latency walking into the
+  forest: 3-4 snaps/s of 9-13cm (could be tree collisions). Client-authority flags read back true. 0.2.2 adds
+  `NetworkMinTimeBetweenClientAdjustments = 1.0` on joined bodies. If his snaps stay ~10/s and large, the cause is not
+  server corrections at all (suspect: something applying the replicated server transform to the owned body).
+- Dropped knife not pickable / dead zombies invisible: runtime-spawned pickups and corpses don't replicate. 0.2.2:
+  `replicateDynamicActors` turns on replication (+movement) for runtime-spawned actors whose class matches
+  Pickup/Dead/Corpse/Dropped/Ragdoll. Loot crates deliberately excluded (the client spawns its own).
+- Server-side "disturbance" counters (SetMovementMode, teleports, montages, offsets on player bodies) showed nothing in
+  loopback walking.
+
 ## Plan
 
 1. Host test, one machine: in the UE4SS console run `open PersistentLevel?listen` from the main menu and check the log for a

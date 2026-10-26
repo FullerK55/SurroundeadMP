@@ -9,7 +9,7 @@
 -- exactly ONE LoopAsync, which once per second runs a tiny scheduler on the game thread. Nothing else is async.
 
 local UEHelpers = require("UEHelpers")
-local VERSION = "0.2.1"
+local VERSION = "0.2.2"
 local LEVEL_NAME = "LongdownValley"
 local PLAYER_CLASS = "/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C"
 
@@ -676,6 +676,35 @@ after(12, function()
       for _, d in ipairs({ 1, 4, 8 }) do after(d, restoreHostControl, "restore-host-control") end
     end)
   end)
+  -- movement disturbance counters (server)
+  for _, fn in ipairs({
+    "/Script/Engine.CharacterMovementComponent:SetMovementMode",
+    "/Script/Engine.CharacterMovementComponent:StopMovementImmediately",
+    "/Script/Engine.CharacterMovementComponent:AddImpulse",
+    "/Script/Engine.CharacterMovementComponent:AddForce",
+    "/Script/Engine.Character:LaunchCharacter",
+    "/Script/Engine.Character:PlayAnimMontage",
+    "/Script/Engine.Character:StopAnimMontage",
+    "/Script/Engine.Character:Jump",
+    "/Script/Engine.Character:Crouch",
+    "/Script/Engine.Character:UnCrouch",
+    "/Script/Engine.Actor:K2_SetActorLocation",
+    "/Script/Engine.Actor:K2_SetActorLocationAndRotation",
+    "/Script/Engine.Actor:K2_TeleportTo",
+    "/Script/Engine.Actor:K2_SetActorRotation",
+    "/Script/Engine.Actor:K2_AddActorWorldOffset",
+    "/Script/Engine.Actor:K2_AddActorLocalOffset",
+    "/Script/Engine.Actor:K2_SetActorRelativeLocation",
+    "/Script/Engine.Actor:SetActorScale3D",
+    "/Script/Engine.Actor:K2_AttachToComponent",
+    "/Script/Engine.Actor:K2_AttachToActor",
+    "/Script/Engine.Actor:DetachFromActor",
+    "/Script/Engine.Actor:SetActorEnableCollision",
+    "/Script/Engine.Pawn:SetActorRotation",
+  }) do
+    local short_ = fn:gsub("^.*[:.]", "")
+    pcall(function() RegisterHook(fn, function(ctx) noteDisturb(short_, ctx) end) end)
+  end
   -- clothing: record the host's attach calls (server) / count received ones (client)
   pcall(function()
     RegisterHook("/Game/Blueprints/BP_PlayerCharacter.BP_PlayerCharacter_C:MC_AttachClothing", function(ctx, clothing, mesh, parts, male, bodyPart, updateAll)
@@ -764,8 +793,10 @@ local function ensureSmoothing()
           local cm = p.CharacterMovement
           cm.bServerAcceptClientAuthoritativePosition = true
           cm.bIgnoreClientMovementErrorChecksAndCorrection = true
+          cm.NetworkMinTimeBetweenClientAdjustments = 1.0           -- at most one forced correction per second
+          cm.NetworkMinTimeBetweenClientAdjustmentsLargeCorrection = 0.5
           smoothed[key .. "auth"] = true
-          log("movement: " .. p:GetFName():ToString() .. " is now client-authoritative")
+          log(string.format("movement: %s is now client-authoritative (readback accept=%s ignore=%s minAdj=%.2f)", p:GetFName():ToString(), tostring(cm.bServerAcceptClientAuthoritativePosition), tostring(cm.bIgnoreClientMovementErrorChecksAndCorrection), cm.NetworkMinTimeBetweenClientAdjustments))
         end
       end)
     end
@@ -818,6 +849,58 @@ restoreHostControl = function()
   log("host control restored: " .. table.concat(done, " "))
 end
 RegisterKeyBind(Key.F4, {}, function() log("F4: restore host control"); pcall(restoreHostControl) end)
+
+-- ---------- server-side movement disturbances on joined bodies (jitter hunt) ----------
+-- Anything the game does to a remote-controlled body on the server between the client's moves (movement mode
+-- changes, teleports, launches, montages) forces a correction and shows up as a snap on the joiner's screen.
+local disturb = {}
+local function noteDisturb(fn, ctx)
+  if isClient() then return end
+  local self; pcall(function() self = ctx:get() end)
+  if not valid(self) then return end
+  local owner = self
+  pcall(function() if self:IsA("/Script/Engine.ActorComponent") then owner = self:GetOwner() end end)
+  if not valid(owner) or owner:GetClass():GetFName():ToString() ~= "BP_PlayerCharacter_C" then return end
+  local ok, ctrl = pcall(function() return owner.Controller end)
+  local hostPc; pcall(function() hostPc = UEHelpers.GetPlayerController() end)
+  local remote = ok and valid(ctrl) and valid(hostPc) and ctrl:GetAddress() ~= hostPc:GetAddress()
+  local k = (remote and "joiner:" or "host:") .. fn
+  disturb[k] = (disturb[k] or 0) + 1
+end
+
+-- ---------- dynamic actors joiners must see: dropped items, dead bodies, loot ----------
+-- Pickups and corpses the game spawns at runtime are not replicated, so joiners never see them. Anything new that
+-- matches these class-name patterns gets replication turned on (movement too, so physics-dropped items land right).
+local DYN_PATTERNS = { "Pickup", "Dead", "Corpse", "Dropped", "Ragdoll" }   -- dropped items, bodies; not loot crates (the client spawns its own)
+local dynSeen = {}
+local function replicateDynamicActors()
+  if isClient() then return end
+  local n = 0
+  for _, a in ipairs(liveInstances("Actor")) do
+    local key = a:GetAddress()
+    if not dynSeen[key] then
+      dynSeen[key] = true
+      -- only actors SPAWNED at runtime (names end in a 10-digit counter and live in the persistent level), never
+      -- level-placed ones streaming in: those already exist on the client and would be duplicated
+      local full = a:GetFullName()
+      local runtime = full:find("PersistentLevel%.PersistentLevel:PersistentLevel%.") and full:match("_%d%d%d%d%d%d%d%d%d%d$") ~= nil
+      if state.dynBaseline and runtime then
+        local cls = a:GetClass():GetFName():ToString()
+        local match = false
+        for _, pat in ipairs(DYN_PATTERNS) do if cls:find(pat, 1, true) then match = true end end
+        if match then
+          local isRep = false; pcall(function() isRep = a:GetIsReplicated() end)
+          if not isRep then
+            pcall(function() a:SetReplicates(true); a:SetReplicateMovement(true) end)
+            n = n + 1
+            log("replicate: new " .. cls .. " -> replicated")
+          end
+        end
+      end
+    end
+  end
+  state.dynBaseline = true
+end
 
 -- ---------- late joiners: equipment and clothing ----------
 -- Weapons/items attached to a player are pickup actors that do not replicate (bReplicates=false), so joiners never
@@ -947,7 +1030,16 @@ local function applyHostAppearance()
   local n = 0
   for line in text:gmatch("[^\r\n]+") do
     local name, path, vis = line:match("^([%w_]+)=(.-)|([01])$")
-    if name and applied[name] ~= line then
+    -- re-apply whenever the component no longer shows the wanted asset (the game's own clothing logic can null
+    -- it again at any time, e.g. after a respawn or an equip broadcast)
+    local current
+    if name then pcall(function()
+      local comp = hostPawn[name]
+      local static = false
+      for _, s in ipairs(APPEAR_STATIC) do if s == name then static = true end end
+      current = componentAsset(comp, static)
+    end) end
+    if name and (applied[name] ~= line or (path ~= "none" and current ~= path)) then
       local ok, err = pcall(function()
         local comp = hostPawn[name]
         if not valid(comp) then error("no component") end
@@ -974,6 +1066,15 @@ end
 every(5, function() if netDriver() then pcall(ensureSmoothing) end end, "smoothing")
 every(10, function() if state.hosting then pcall(writeAppearance) end; if state.joining and isClient() then pcall(applyHostAppearance) end end, "appearance")
 every(10, function() if state.hosting then pcall(replicateAttachedItems) end end, "replicate-items")
+every(3, function() if state.hosting then pcall(replicateDynamicActors) end end, "replicate-dynamic")
+every(10, function()
+  if not state.hosting then return end
+  local parts = {}
+  for k, v in pairs(disturb) do parts[#parts+1] = k .. "=" .. v end
+  table.sort(parts)
+  if #parts > 0 then log("disturb (10s): " .. table.concat(parts, " ")) end
+  disturb = {}
+end, "disturb-report")
 -- client: report snaps every 10s while in the world (goes to the log the host receives)
 every(10, function()
   if state.joining and isClient() and (state.snaps or 0) + (state.moveResponses or 0) > 0 then
