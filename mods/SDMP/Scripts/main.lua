@@ -417,30 +417,34 @@ cmdHost = function()
   return true
 end
 
--- did the host answer yet? (pending connection with at least one packet received, or already a client)
+-- did the host answer yet? A connection's LastReceiveTime is stamped at creation, so a value alone means
+-- nothing; it only moves when a packet actually arrives. Compare against the first value we saw.
+local seenRecv = {}
 local function hostReplied()
   if isClient() then return true end
-  for _, pg in ipairs(liveInstances("PendingNetGame")) do
-    local ok, t = pcall(function() return pg.NetDriver.ServerConnection.LastReceiveTime end)
-    if ok and tonumber(t) and tonumber(t) > 0 then return true end
-  end
   for _, c in ipairs(liveInstances("NetConnection")) do
     local ok, t = pcall(function() return c.LastReceiveTime end)
-    if ok and tonumber(t) and tonumber(t) > 0 then return true end
+    if ok and tonumber(t) then
+      local key = c:GetAddress()
+      if seenRecv[key] == nil then seenRecv[key] = tonumber(t)
+      elseif tonumber(t) > seenRecv[key] + 0.001 then return true end
+    end
   end
   return false
 end
 
 local function joinProgress(url)
   local started = os.time()
-  local found = false
+  local found, finished = false, false
+  seenRecv = {}
   LoopAsync(1000, function()
-    local done = false
+    if finished then return true end
     ExecuteInGameThread(function()
+      if finished then return end
       local elapsed = os.time() - started
       if isClient() then
         local ok, pawn = pcall(function() return UEHelpers.GetPlayerController().Pawn end)
-        if ok and valid(pawn) then log("JOIN: connected and in the world"); done = true; return end
+        if ok and valid(pawn) then log("JOIN: connected and in the world"); finished = true; return end
         if not found then found = true; log("JOIN: host found, loading world...") end
         if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
         return
@@ -448,17 +452,17 @@ local function joinProgress(url)
       if hostReplied() then
         if not found then found = true; log("JOIN: host found (" .. url .. "), loading...") end
         if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST FOUND, LOADING...") end
-        if elapsed > 90 then log("JOIN: stuck after host reply for 90s, giving up"); state.joining = false; done = true end
+        if elapsed > 90 then log("JOIN: stuck after host reply for 90s, giving up"); state.joining = false; finished = true end
         return
       end
       if elapsed >= 15 then
         log("JOIN: HOST NOT FOUND after 15s (" .. url .. "). Is the host past HOSTING OK? Is Radmin green?")
         if valid(menuUI.join) then setButtonText(menuUI.join, "MP: HOST NOT FOUND - click to retry") end
-        state.joining = false; done = true; return
+        state.joining = false; finished = true; return
       end
       if valid(menuUI.join) then setButtonText(menuUI.join, "MP: CONNECTING... " .. elapsed .. "s") end
     end)
-    return done
+    return false
   end)
 end
 
