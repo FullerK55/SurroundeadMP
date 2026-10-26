@@ -41,9 +41,17 @@ try {
     Copy-Item (Join-Path $modSrc "*") $dst -Recurse -Force
     if (-not (Test-Path (Join-Path $dst "enabled.txt"))) { New-Item -ItemType File (Join-Path $dst "enabled.txt") | Out-Null }
 
-    # also refresh this updater for next time (never the .bat: cmd reads a running batch file incrementally)
+    # also refresh the helper scripts and stage a new updater / launcher for next time
+    # (the running .bat is never overwritten directly: cmd reads a batch file incrementally; it swaps itself at its last line)
+    foreach ($f in @("sdmp_logserver.ps1", "sdmp_sendlog.ps1", "sdmp_firewall.ps1")) {
+        $p = Join-Path $src.FullName "package\Win64\$f"
+        if (Test-Path $p) { Copy-Item $p (Join-Path $gameDir $f) -Force }
+    }
     $p = Join-Path $src.FullName "package\Win64\sdmp_update.ps1"
     if (Test-Path $p) { Copy-Item $p (Join-Path $gameDir "sdmp_update.ps1.new") -Force }
+    $p = Join-Path $src.FullName "package\Win64\Launch SurrounDead MP.bat"
+    $cur = Join-Path $gameDir "Launch SurrounDead MP.bat"
+    if ((Test-Path $p) -and (Test-Path $cur) -and ((Get-FileHash $p).Hash -ne (Get-FileHash $cur).Hash)) { Copy-Item $p "$cur.new" -Force }
 
     $m = Select-String -Path (Join-Path $dst "Scripts\main.lua") -Pattern 'local VERSION = "([^"]+)"'
     $ver = if ($m) { $m.Matches[0].Groups[1].Value } else { "?" }
@@ -53,3 +61,18 @@ try {
     Write-Host "[SDMP] Update skipped: $($_.Exception.Message)"
     Write-Host "[SDMP] Launching with the mod version already installed."
 }
+
+# Host only, one time: firewall rule so joiners' log senders can reach the receiver (TCP 7778, Radmin addresses only).
+# "Host" = the host_ip in sdmp.ini is one of this PC's own addresses. Shows a UAC prompt once.
+try {
+    $ini = Join-Path $gameDir "ue4ss\Mods\SDMP\Scripts\sdmp.ini"
+    $m = Select-String -Path $ini -Pattern '^\s*host_ip\s*=\s*(\S+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($m) {
+        $hostIp = $m.Matches[0].Groups[1].Value
+        $mine = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.IPAddress })
+        if (($mine -contains $hostIp) -and -not (Get-NetFirewallRule -DisplayName "SDMP log receiver" -ErrorAction SilentlyContinue)) {
+            Write-Host "[SDMP] You are the host: adding the firewall rule for joiner logs (one-time, needs admin: click Yes)"
+            Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$gameDir\sdmp_firewall.ps1`"" -Wait
+        }
+    }
+} catch { Write-Host "[SDMP] Firewall rule step skipped: $($_.Exception.Message)" }

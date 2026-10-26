@@ -1,6 +1,7 @@
 @echo off
 rem SDMP launcher: pulls the latest mod files from GitHub (sdmp_update.ps1), then starts the game
 rem directly, NOT through Steam, so plain IP networking works. Steam can stay open.
+rem Also starts two silent helpers: the log receiver (host) and the log sender (joiners).
 rem NOTE: no parenthesized blocks in this file; the install path may contain "(x86)".
 cd /d "%~dp0"
 if not exist "%~dp0SurrounDead-Win64-Shipping.exe" goto wrongfolder
@@ -18,7 +19,11 @@ echo [SDMP] sdmp_update.ps1 missing, skipping update.
 if not exist "%~dp0ue4ss\Mods\SDMP\Scripts\main.lua" goto nomod
 echo [SDMP] Starting SurrounDead...
 start "" "%~dp0SurrounDead-Win64-Shipping.exe" -nosteam
-exit /b 0
+rem helpers (hidden). The receiver only matters on the host; the sender only acts on joiners.
+if exist "%~dp0sdmp_logserver.ps1" start "" /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0sdmp_logserver.ps1"
+if exist "%~dp0sdmp_sendlog.ps1" start "" /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0sdmp_sendlog.ps1"
+rem self-update must be the LAST line: cmd has already read it, so replacing the file now is safe
+if exist "%~dp0Launch SurrounDead MP.bat.new" move /y "%~dp0Launch SurrounDead MP.bat.new" "%~dp0Launch SurrounDead MP.bat" >nul & exit /b 0
 
 :nomod
 echo [SDMP] ERROR: the mod is not installed and could not be downloaded. Install the zip first.

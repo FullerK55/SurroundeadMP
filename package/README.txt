@@ -38,6 +38,12 @@ JOINING, STEP BY STEP
 3. Press F9 once. Wait up to 30 seconds. If a "press any key" screen appears, press space.
 4. Press F6: role=CLIENT and a pawn= line means you are in.
 
+LOGS (automatic)
+While you play, your mod log is sent to the host over Radmin every 30 seconds (nothing leaves the Radmin network).
+Press F6 in game to add a status line to it. If that ever fails, F5 copies the log to your Desktop (SDMP-log.txt).
+Host: the first launch asks once for admin rights to allow the log receiver from Radmin addresses only. Click Yes.
+Joiner logs land in  SurrounDead\Binaries\Win64\joiner_logs\  on the host.
+
 IF IT GOES WRONG
 Send back  SurrounDead\Binaries\Win64\SDMP.log .
 
