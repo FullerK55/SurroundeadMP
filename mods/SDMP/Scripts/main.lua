@@ -191,11 +191,16 @@ end
 RegisterConsoleCommandHandler("sdmp_levels", function() logLevels("manual"); return true end)
 
 -- client: once connected with a pawn, kill the menu UI and give input back to the game
-local MENU_WIDGETS = { MenuWidget_C = true, LoadingScreenWidget_C = true, MainMenu_C = true }
+-- Only the menu itself. The loading screen is the game's own transition widget and removing it mid-transition
+-- crashed a client once; the game takes it down by itself.
+local MENU_WIDGETS = { MenuWidget_C = true, MainMenu_C = true }
 local function clientTakeControl()
   local pc = UEHelpers.GetPlayerController()
   local ok, pawn = pcall(function() return pc.Pawn end)
-  if not (ok and valid(pawn)) then return end
+  if not (ok and valid(pawn)) then state.pawnSince = nil; return end
+  -- let the engine finish the travel/streaming before we touch UI or input: wait a few seconds after the pawn appears
+  state.pawnSince = state.pawnSince or os.time()
+  if os.time() - state.pawnSince < 4 then return end
   -- the game's single-player start flow also runs on a client when the world level streams in, spawning a
   -- local, non-networked player. Locally spawned actors on a client have local role Authority (3);
   -- real networked pawns are AutonomousProxy (2) or SimulatedProxy (1). Destroy the phantoms.
@@ -230,8 +235,11 @@ local function clientTakeControl()
   end
 end
 
--- client: make sure the world sub-level streams in and the menu sub-level goes away
+-- client: make sure the world sub-level streams in and the menu sub-level goes away.
+-- The game's own Event_LoadLevel usually does both on the client a few seconds after the join; we only step in
+-- if it hasn't, and never during the transition (unloading MainMenu while its level Blueprint runs crashed a client).
 local function ensureLevelLoaded()
+  if not state.pawnSince or os.time() - state.pawnSince < 6 then return end
   eachStreamingLevel(function(ls, pkg, loaded, visible, sbl, sbv)
     if pkg:find(LEVEL_NAME, 1, true) and not (loaded and visible) then
       log("client: requesting stream-in of " .. pkg .. " (loaded=" .. tostring(loaded) .. " visible=" .. tostring(visible) .. ")")
